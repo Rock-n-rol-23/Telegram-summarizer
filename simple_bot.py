@@ -174,9 +174,13 @@ class SimpleTelegramBot:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=data) as response:
                     result = await response.json()
+                    if result.get("ok"):
+                        logger.info(f"Сообщение успешно отправлено в чат {chat_id}")
+                    else:
+                        logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {result}")
                     return result
         except Exception as e:
-            logger.error(f"Ошибка отправки сообщения: {e}")
+            logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {e}")
             return None
     
     async def delete_message(self, chat_id: int, message_id: int):
@@ -258,6 +262,8 @@ class SimpleTelegramBot:
         """Обработка команды /start"""
         chat_id = update["message"]["chat"]["id"]
         user = update["message"]["from"]
+        
+        logger.info(f"Обработка команды /start от пользователя {user.get('id')} в чате {chat_id}")
         
         welcome_text = """🤖 Привет! Я бот для создания кратких саммари текста.
 
@@ -406,9 +412,14 @@ class SimpleTelegramBot:
                 
                 if "text" in message:
                     text = message["text"]
+                    chat_id = message["chat"]["id"]
+                    user_id = message["from"]["id"]
+                    
+                    logger.info(f"Получено сообщение от пользователя {user_id}: '{text[:50]}...'")
                     
                     if text.startswith("/"):
                         # Обработка команд
+                        logger.info(f"Обработка команды: {text}")
                         if text == "/start":
                             await self.handle_start_command(update)
                         elif text == "/help":
@@ -416,12 +427,14 @@ class SimpleTelegramBot:
                         elif text == "/stats":
                             await self.handle_stats_command(update)
                         else:
+                            logger.warning(f"Неизвестная команда: {text}")
                             await self.send_message(
-                                message["chat"]["id"],
+                                chat_id,
                                 "❓ Неизвестная команда. Используйте /help для получения справки."
                             )
                     else:
                         # Обработка текстовых сообщений
+                        logger.info(f"Обработка текстового сообщения от пользователя {user_id}")
                         await self.handle_text_message(update)
                         
         except Exception as e:
