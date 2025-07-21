@@ -407,8 +407,11 @@ class SimpleTelegramBot:
     async def handle_update(self, update: dict):
         """Обработка обновлений от Telegram"""
         try:
+            logger.info(f"Полученное обновление: {update}")
+            
             if "message" in update:
                 message = update["message"]
+                logger.info(f"Найдено сообщение в обновлении: {message}")
                 
                 if "text" in message:
                     text = message["text"]
@@ -436,9 +439,15 @@ class SimpleTelegramBot:
                         # Обработка текстовых сообщений
                         logger.info(f"Обработка текстового сообщения от пользователя {user_id}")
                         await self.handle_text_message(update)
+                else:
+                    logger.warning(f"Сообщение не содержит текста: {message}")
+            else:
+                logger.warning(f"Обновление не содержит сообщения: {update}")
                         
         except Exception as e:
             logger.error(f"Ошибка обработки обновления: {e}")
+            import traceback
+            logger.error(f"Детали ошибки: {traceback.format_exc()}")
     
     async def get_updates(self, offset = None, timeout: int = 30):
         """Получение обновлений от Telegram"""
