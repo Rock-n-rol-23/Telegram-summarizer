@@ -489,9 +489,18 @@ class SimpleTelegramBot:
                 updates = await self.get_updates(offset=offset, timeout=30)
                 
                 if updates and updates.get("ok"):
-                    for update in updates.get("result", []):
+                    update_list = updates.get("result", [])
+                    if update_list:
+                        logger.info(f"Получено {len(update_list)} обновлений")
+                    
+                    for update in update_list:
+                        logger.info(f"Обработка обновления: {update.get('update_id')}")
                         await self.handle_update(update)
                         offset = update["update_id"] + 1
+                        logger.info(f"Обновлен offset: {offset}")
+                else:
+                    if updates:
+                        logger.error(f"Ошибка получения обновлений: {updates}")
                 
                 await asyncio.sleep(0.1)
                 
