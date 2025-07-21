@@ -496,9 +496,32 @@ class SimpleTelegramBot:
             logger.error(f"Ошибка получения обновлений: {e}")
             return None
     
+    async def clear_webhook(self):
+        """Очистка webhook для устранения конфликтов 409"""
+        try:
+            url = f"{self.base_url}/deleteWebhook"
+            params = {"drop_pending_updates": "true"}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, params=params) as response:
+                    result = await response.json()
+                    if result.get("ok"):
+                        logger.info("Webhook успешно удален")
+                        return True
+                    else:
+                        logger.warning(f"Не удалось удалить webhook: {result}")
+                        return False
+        except Exception as e:
+            logger.error(f"Ошибка при удалении webhook: {e}")
+            return False
+
     async def run(self):
         """Запуск бота"""
         logger.info("Запуск Simple Telegram Bot")
+        
+        # Очищаем webhook для предотвращения конфликтов 409
+        await self.clear_webhook()
+        await asyncio.sleep(2)  # Даем время на очистку
         
         # Проверяем подключение к Telegram API
         try:
@@ -536,7 +559,16 @@ class SimpleTelegramBot:
                         logger.info(f"Обновлен offset: {offset}")
                 else:
                     if updates:
-                        logger.error(f"Ошибка получения обновлений: {updates}")
+                        error_code = updates.get("error_code")
+                        if error_code == 409:
+                            # Конфликт с другим экземпляром бота
+                            logger.warning("Обнаружен конфликт 409 - другой экземпляр бота активен")
+                            logger.info("Очистка webhook и повторная попытка...")
+                            await self.clear_webhook()
+                            await asyncio.sleep(5)  # Увеличенная пауза для разрешения конфликта
+                            continue
+                        else:
+                            logger.error(f"Ошибка получения обновлений: {updates}")
                 
                 await asyncio.sleep(0.1)
                 
