@@ -322,13 +322,29 @@ class SimpleTelegramBot:
         
         await self.send_message(chat_id, stats_text)
     
-    async def handle_text_message(self, update: dict):
+    async def handle_text_message(self, update: dict, message_text: str = None):
         """Обработка текстовых сообщений"""
         chat_id = update["message"]["chat"]["id"]
         user = update["message"]["from"]
         user_id = user["id"]
         username = user.get("username", "")
-        text = update["message"]["text"]
+        
+        # Используем переданный текст или извлекаем из сообщения
+        if message_text:
+            text = message_text
+        else:
+            # Функция для извлечения текста из сообщения
+            def extract_text_from_message(msg):
+                if "text" in msg:
+                    return msg["text"]
+                elif "caption" in msg:
+                    return msg["caption"]
+                return None
+            
+            text = extract_text_from_message(update["message"])
+            if not text:
+                logger.error("Не удалось извлечь текст из сообщения")
+                return
         
         logger.info(f"Получен текст от пользователя {user_id} ({username}), длина: {len(text)} символов")
         
@@ -460,7 +476,7 @@ class SimpleTelegramBot:
                     else:
                         # Обработка текстовых сообщений (обычных и пересланных)
                         logger.info(f"Обработка текстового сообщения от пользователя {user_id}")
-                        await self.handle_text_message(update)
+                        await self.handle_text_message(update, message_text=text)
                 else:
                     logger.warning(f"Сообщение не содержит текста: {message}")
                     # Проверяем, есть ли другие типы контента
