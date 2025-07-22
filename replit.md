@@ -101,3 +101,13 @@ The application follows a modular Python architecture with clear separation of c
 - **Resource Management**: Lazy loading of heavy ML models
 
 The architecture prioritizes reliability, user experience, and operational simplicity while maintaining high-quality summarization capabilities through the dual-backend approach.
+
+## Recent Changes
+
+### 2025-07-22: Enhanced Forwarded Message Support
+- Fixed KeyError when processing forwarded messages with captions
+- Added universal text extraction from both 'text' and 'caption' fields  
+- Enhanced `handle_text_message` to accept extracted text parameter
+- Resolved 409 conflict errors with automatic webhook clearing
+- Bot now handles all media types with text content (images with captions, etc.)
+- Improved error handling for robust forwarded message processing
