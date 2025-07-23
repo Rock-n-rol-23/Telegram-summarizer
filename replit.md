@@ -116,15 +116,22 @@ The architecture prioritizes reliability, user experience, and operational simpl
 
 ## Recent Changes
 
-### 2025-07-23: Deployment Fixes Applied
-- **Fixed Cloud Run deployment issues** by creating main_server.py with HTTP health checks
-- **Added HTTP server** running on port 5000 with health check endpoints (/, /health, /status)
-- **Updated workflow configuration** to use explicit main file (python main_server.py)
-- **Added Flask dependency** to pyproject.toml for HTTP server functionality
-- **Created dual-mode architecture**: HTTP server + Telegram bot running concurrently
-- **Implemented proper signal handling** for graceful shutdown
-- **Added deployment entry points**: main_server.py (Cloud Run), simple_bot.py (Background Worker)
-- **Verified health checks** working correctly with 200 responses
+### 2025-07-23: Comprehensive Deployment Fixes Applied
+- **Fixed all Cloud Run deployment issues** with enhanced HTTP health check system
+- **Added multiple health check endpoints** (/, /health, /ready, /ping, /status) with proper JSON responses
+- **Created explicit run commands** replacing $file variable with python main_server.py
+- **Enhanced Flask/aiohttp support** with comprehensive HTTP server functionality
+- **Added multi-mode deployment support**: Cloud Run (HTTP + bot) and Background Worker (bot only)
+- **Implemented proper polling loop** in main execution block with graceful shutdown
+- **Created comprehensive deployment entry points**:
+  - main_server.py: Cloud Run mode with HTTP server
+  - simple_bot.py: Background Worker mode (bot only)
+  - deploy.py: Auto-detection deployment script
+  - run.py: Enhanced startup script
+- **Added deployment configuration files**: Dockerfile, start.sh, DEPLOYMENT.md
+- **Verified all endpoints** responding correctly with proper status codes and JSON
+- **Enhanced health check responses** with timestamps and readiness indicators
+- **Added deployment verification tools** and troubleshooting documentation
 
 ### 2025-07-22: Enhanced Forwarded Message Support
 - Fixed KeyError when processing forwarded messages with captions

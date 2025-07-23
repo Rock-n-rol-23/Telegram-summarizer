@@ -41,18 +41,27 @@ class TelegramBotServer:
         try:
             # Проверяем, что бот активен
             if self.bot and self.bot_task and not self.bot_task.done():
-                return web.json_response({"status": "healthy", "service": "telegram-bot"})
+                return web.json_response({
+                    "status": "healthy", 
+                    "service": "telegram-bot",
+                    "timestamp": asyncio.get_event_loop().time(),
+                    "ready": True
+                })
             else:
-                return web.json_response(
-                    {"status": "unhealthy", "service": "telegram-bot", "reason": "bot not running"}, 
-                    status=503
-                )
+                return web.json_response({
+                    "status": "unhealthy", 
+                    "service": "telegram-bot", 
+                    "reason": "bot not running",
+                    "ready": False
+                }, status=503)
         except Exception as e:
             logger.error(f"Health check error: {e}")
-            return web.json_response(
-                {"status": "unhealthy", "service": "telegram-bot", "error": str(e)}, 
-                status=503
-            )
+            return web.json_response({
+                "status": "unhealthy", 
+                "service": "telegram-bot", 
+                "error": str(e),
+                "ready": False
+            }, status=503)
     
     async def status_endpoint(self, request):
         """Status endpoint с дополнительной информацией"""
@@ -72,6 +81,10 @@ class TelegramBotServer:
             logger.error(f"Status endpoint error: {e}")
             return web.json_response({"error": str(e)}, status=500)
     
+    async def ping_endpoint(self, request):
+        """Simple ping endpoint for deployment verification"""
+        return web.json_response({"message": "pong", "service": "telegram-bot"})
+    
     async def setup_http_server(self):
         """Настройка HTTP сервера для health checks"""
         self.app = web.Application()
@@ -79,7 +92,9 @@ class TelegramBotServer:
         # Добавляем маршруты
         self.app.router.add_get('/', self.health_check)
         self.app.router.add_get('/health', self.health_check)
+        self.app.router.add_get('/ready', self.health_check)
         self.app.router.add_get('/status', self.status_endpoint)
+        self.app.router.add_get('/ping', self.ping_endpoint)
         
         # Настройка CORS для всех маршрутов
         self.app.router.add_options('/{path:.*}', self.handle_options)
