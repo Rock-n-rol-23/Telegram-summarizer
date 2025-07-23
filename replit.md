@@ -74,12 +74,24 @@ The application follows a modular Python architecture with clear separation of c
 ## Deployment Strategy
 
 ### Platform Support
-- **Primary Target**: Replit (ready for deployment)
-- **Alternative**: Any Python hosting platform
+- **Primary Target**: Replit with Cloud Run deployment (ready for deployment)
+- **Alternative**: Any Python hosting platform with HTTP server support
+
+### Deployment Architecture
+- **HTTP Server**: Runs on port 5000 with health check endpoints
+- **Telegram Bot**: Runs concurrently with HTTP server for 24/7 operation
+- **Health Checks**: Available at `/` and `/health` endpoints
+- **Status Information**: Available at `/status` endpoint
+
+### Main Entry Points
+- **main_server.py**: Combined HTTP server and Telegram bot (for Cloud Run)
+- **simple_bot.py**: Standalone Telegram bot (for Background Worker)
+- **deploy.py**: Alternative deployment entry point
 
 ### Configuration Requirements
 - `TELEGRAM_BOT_TOKEN`: Telegram bot authentication
 - `GROQ_API_KEY`: Groq API access (optional, enables primary backend)
+- `PORT`: HTTP server port (defaults to 5000)
 - `DATABASE_URL`: SQLite database path (defaults to local file)
 
 ### Scalability Considerations
@@ -103,6 +115,16 @@ The application follows a modular Python architecture with clear separation of c
 The architecture prioritizes reliability, user experience, and operational simplicity while maintaining high-quality summarization capabilities through the dual-backend approach.
 
 ## Recent Changes
+
+### 2025-07-23: Deployment Fixes Applied
+- **Fixed Cloud Run deployment issues** by creating main_server.py with HTTP health checks
+- **Added HTTP server** running on port 5000 with health check endpoints (/, /health, /status)
+- **Updated workflow configuration** to use explicit main file (python main_server.py)
+- **Added Flask dependency** to pyproject.toml for HTTP server functionality
+- **Created dual-mode architecture**: HTTP server + Telegram bot running concurrently
+- **Implemented proper signal handling** for graceful shutdown
+- **Added deployment entry points**: main_server.py (Cloud Run), simple_bot.py (Background Worker)
+- **Verified health checks** working correctly with 200 responses
 
 ### 2025-07-22: Enhanced Forwarded Message Support
 - Fixed KeyError when processing forwarded messages with captions
