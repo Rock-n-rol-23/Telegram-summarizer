@@ -9,7 +9,7 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from typing import Dict, Set
+from typing import Dict, Set, Optional
 import os
 import sys
 import aiohttp
@@ -160,7 +160,7 @@ class SimpleTelegramBot:
             logger.error(f"Ошибка получения статистики: {e}")
             return {'total_requests': 0, 'total_chars': 0, 'total_summary_chars': 0, 'avg_compression': 0, 'first_request': None}
     
-    async def send_message(self, chat_id: int, text: str, parse_mode: str = None):
+    async def send_message(self, chat_id: int, text: str, parse_mode: Optional[str] = None):
         """Отправка сообщения"""
         url = f"{self.base_url}/sendMessage"
         data = {
@@ -325,7 +325,7 @@ class SimpleTelegramBot:
         
         await self.send_message(chat_id, stats_text)
     
-    async def handle_text_message(self, update: dict, message_text: str = None):
+    async def handle_text_message(self, update: dict, message_text: Optional[str] = None):
         """Обработка текстовых сообщений"""
         chat_id = update["message"]["chat"]["id"]
         user = update["message"]["from"]
@@ -449,7 +449,8 @@ class SimpleTelegramBot:
                 
                 if "text" in message or "caption" in message:
                     text = extract_text_from_message(message)
-                    logger.info(f"Получено сообщение от пользователя {user_id}: '{text[:50]}...'")
+                    if text:
+                        logger.info(f"Получено сообщение от пользователя {user_id}: '{text[:50]}...'")
                 elif "forward_from" in message or "forward_from_chat" in message or "forward_origin" in message:
                     # Обработка пересланных сообщений (все форматы)
                     text = extract_text_from_message(message)

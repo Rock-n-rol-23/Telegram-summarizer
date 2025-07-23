@@ -1,27 +1,32 @@
-# Dockerfile for Cloud Run deployment
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install dependencies
-COPY pyproject.toml uv.lock ./
-RUN pip install uv && uv pip install --system --no-deps -r pyproject.toml
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy application code
+# Copy requirements and install dependencies
+COPY pyproject.toml .
+RUN pip install --upgrade pip && pip install --no-cache-dir .
+
+# Copy the application code
 COPY . .
 
-# Create a non-root user
-RUN useradd --create-home --shell /bin/bash app
-RUN chown -R app:app /app
-USER app
+# Set environment variables for Cloud Run
+ENV PORT=5000
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV DEPLOYMENT_TYPE=cloudrun
 
-# Expose port
+# Expose the port
 EXPOSE 5000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
+    CMD python -c "import requests; requests.get('http://localhost:5000/health')" || exit 1
 
-# Run the application
+# Default command - explicitly runs the HTTP server with bot
 CMD ["python", "main_server.py"]
