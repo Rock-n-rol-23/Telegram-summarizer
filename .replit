@@ -21,7 +21,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python cloudrun_optimized.py"
+args = "python main_entrypoint.py"
 waitForPort = 5000
 
 [deployment]
