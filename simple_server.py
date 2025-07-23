@@ -54,10 +54,12 @@ class SimpleTelegramServer:
         """Setup web application with minimal routes"""
         self.app = web.Application()
         
-        # Add essential routes for Cloud Run
+        # Add essential routes for Cloud Run and Kubernetes
         self.app.router.add_get('/', self.root_handler)
         self.app.router.add_get('/health', self.health_check)
         self.app.router.add_get('/ready', self.health_check)
+        self.app.router.add_get('/healthz', self.health_check)  # Kubernetes-style
+        self.app.router.add_get('/readiness', self.health_check)  # Kubernetes-style
         
         return self.app
     
