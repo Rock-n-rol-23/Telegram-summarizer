@@ -6,6 +6,7 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install dependencies
@@ -24,9 +25,9 @@ ENV DEPLOYMENT_TYPE=cloudrun
 # Expose the port
 EXPOSE 5000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:5000/health')" || exit 1
+# Enhanced health check for Cloud Run deployment
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=5 \
+    CMD curl -f http://localhost:5000/ || curl -f http://localhost:5000/health || exit 1
 
-# Default command - runs the Cloud Run optimized server
-CMD ["python", "cloudrun_optimized.py"]
+# Default command - runs the main entry point (explicit, no $file variable)
+CMD ["python", "main_entrypoint.py"]

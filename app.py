@@ -1,100 +1,64 @@
 #!/usr/bin/env python3
 """
-Flask-style app entry point for compatibility with various deployment platforms
-This file provides a Flask-compatible entry point that can be used with different deployment systems
+Flask-style entry point for maximum deployment compatibility
+This ensures compatibility with various deployment platforms expecting app.py
 """
 
 import os
+import sys
 import asyncio
-import threading
-from flask import Flask, jsonify
-from simple_bot import SimpleTelegramBot
 import logging
+from pathlib import Path
+
+# Add current directory to Python path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
 
-# Create Flask app
-app = Flask(__name__)
-
-# Global bot instance
-bot_instance = None
-bot_thread = None
-
-def run_bot_async():
-    """Run the bot in async mode"""
-    global bot_instance
+def create_flask_app():
+    """Create a Flask app for compatibility (if needed)"""
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        from flask import Flask, jsonify
         
-        bot_instance = SimpleTelegramBot()
-        logger.info("Starting Telegram bot in background thread...")
-        loop.run_until_complete(bot_instance.run())
-    except Exception as e:
-        logger.error(f"Bot error: {e}")
+        app = Flask(__name__)
+        
+        @app.route('/')
+        def root():
+            return "Telegram Summarization Bot - Flask Ready"
+        
+        @app.route('/health')
+        def health():
+            return jsonify({
+                "status": "healthy",
+                "service": "telegram-bot-flask",
+                "ready": True
+            })
+        
+        return app
+    except ImportError:
+        logger.warning("Flask not available, using aiohttp server")
+        return None
 
-@app.route('/')
-def root():
-    """Root endpoint for health checks"""
-    return jsonify({
-        "status": "healthy",
-        "service": "telegram-bot-flask",
-        "message": "Telegram Bot Server - OK"
-    })
-
-@app.route('/health')
-def health():
-    """Health check endpoint"""
-    return jsonify({
-        "status": "healthy",
-        "service": "telegram-bot-flask",
-        "bot_running": bot_instance is not None,
-        "ready": True
-    })
-
-@app.route('/ready')
-def ready():
-    """Readiness probe endpoint"""
-    return jsonify({
-        "status": "ready",
-        "service": "telegram-bot-flask",
-        "ready": True
-    })
-
-@app.route('/healthz')
-def healthz():
-    """Kubernetes-style health check"""
-    return jsonify({
-        "status": "healthy",
-        "service": "telegram-bot-flask"
-    })
-
-@app.route('/readiness')
-def readiness():
-    """Kubernetes-style readiness check"""
-    return jsonify({
-        "status": "ready",
-        "service": "telegram-bot-flask"
-    })
-
-if __name__ == '__main__':
-    # Set deployment environment
+async def main():
+    """Main entry point - delegates to appropriate deployment mode"""
+    logger.info("🚀 Starting via app.py entry point")
+    
+    # Force Cloud Run mode for app.py
     os.environ['DEPLOYMENT_TYPE'] = 'cloudrun'
     
-    # Start bot in background thread
-    bot_thread = threading.Thread(target=run_bot_async, daemon=True)
-    bot_thread.start()
-    
-    # Get port from environment
-    port = int(os.environ.get('PORT', 5000))
-    
-    logger.info(f"Starting Flask server on port {port}")
-    logger.info("Telegram bot running in background")
-    
-    # Run Flask app
-    app.run(host='0.0.0.0', port=port, debug=False)
+    # Use the main entry point logic
+    from main_entrypoint import main as main_entry
+    main_entry()
+
+# Flask app instance (for compatibility)
+app = create_flask_app()
+
+if __name__ == "__main__":
+    # If run directly, use async mode
+    asyncio.run(main())
