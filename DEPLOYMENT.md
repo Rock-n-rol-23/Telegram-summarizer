@@ -7,20 +7,25 @@ This Telegram bot supports multiple deployment modes to ensure reliable operatio
 ## Fixed Deployment Issues
 
 ✅ **Health Check Endpoints**: Added comprehensive HTTP health checks
-✅ **Explicit Run Command**: Replaced `$file` variable with explicit `python main_server.py`
+✅ **Explicit Run Command**: Replaced `$file` variable with explicit `python run.py`
 ✅ **Flask Dependency**: Already included in pyproject.toml
 ✅ **Multiple Deployment Modes**: Cloud Run and Background Worker support
 ✅ **Proper Polling Loop**: Bot starts correctly in main execution block
 
 ## Deployment Options
 
-### 1. Cloud Run Deployment (HTTP Server + Bot)
-- **Entry Point**: `main_server.py`
-- **Health Checks**: Available at `/`, `/health`, `/ready`, `/ping`
+### 1. Cloud Run Deployment (HTTP Server + Bot) - RECOMMENDED
+- **Entry Point**: `run.py` (primary), `main.py` (auto-detect), `app.py` (compatibility)
+- **Health Checks**: Available at `/`, `/health`, `/ready`, `/status`, `/ping`
 - **Port**: 5000 (configurable via `PORT` environment variable)
 - **Features**: HTTP server with Telegram bot running concurrently
+- **Fixed Issues**: 
+  - ✓ Removed $file variable dependency
+  - ✓ Added explicit entry point files
+  - ✓ Enhanced health check endpoints with JSON responses
+  - ✓ Improved error handling and logging
 
-**Command**: `python main_server.py`
+**Command**: `python run.py`
 
 ### 2. Background Worker Deployment (Bot Only)
 - **Entry Point**: `simple_bot.py`
@@ -30,11 +35,14 @@ This Telegram bot supports multiple deployment modes to ensure reliable operatio
 **Command**: `python simple_bot.py`
 
 ### 3. Auto-Detection Deployment
-- **Entry Point**: `deploy.py`
-- **Features**: Automatically chooses deployment mode based on environment
-- **Logic**: Uses Background Worker on Replit, Cloud Run elsewhere
+- **Entry Point**: `main.py`
+- **Features**: Automatically detects deployment environment and chooses mode
+- **Environment Variables**: Uses `K_SERVICE`, `REPLIT_DEPLOYMENT`, `DEPLOYMENT_TYPE`
+- **Deployment Types**: 
+  - 'cloudrun' or 'http' → HTTP server + bot
+  - 'background' or 'worker' → Bot only
 
-**Command**: `python deploy.py`
+**Command**: `python main.py`
 
 ## Health Check Endpoints
 

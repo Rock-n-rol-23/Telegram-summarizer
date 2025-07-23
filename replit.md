@@ -73,6 +73,40 @@ The application follows a modular Python architecture with clear separation of c
 
 ## Deployment Strategy
 
+The application supports multiple deployment modes with automatic environment detection:
+
+### Cloud Run Deployment (Recommended for Production)
+- **Entry Point**: `run.py` (or `main.py`, `app.py`)
+- **Command**: `python run.py`
+- **Features**: HTTP server with health checks + Telegram bot
+- **Port**: 5000 (configurable via `PORT` environment variable)
+- **Health Endpoints**: `/`, `/health`, `/ready`, `/status`, `/ping`
+
+### Background Worker Deployment
+- **Entry Point**: `simple_bot.py`
+- **Command**: `python simple_bot.py`
+- **Features**: Telegram bot only (no HTTP server)
+- **Use Case**: When HTTP endpoints are not required
+
+### Auto-Detection Deployment
+- **Entry Point**: `main.py`
+- **Command**: `python main.py`
+- **Features**: Automatically detects environment and chooses appropriate mode
+- **Environment Variables**:
+  - `DEPLOYMENT_TYPE`: Set to 'background' or 'cloudrun'
+  - `K_SERVICE`: Detected automatically on Google Cloud Run
+  - `REPLIT_DEPLOYMENT`: Detected automatically on Replit
+
+## Recent Changes
+
+**2025-07-23**: Fixed deployment configuration
+- ✓ Updated run.py to use explicit main_server.py import
+- ✓ Created main.py with auto-detection for deployment modes
+- ✓ Added app.py for Flask-style deployment compatibility
+- ✓ Improved health check endpoints with JSON responses
+- ✓ Updated workflow configuration to use `python run.py` instead of $file variable
+- ✓ Enhanced error handling and logging for deployment scenarios
+
 ### Platform Support
 - **Primary Target**: Replit with Cloud Run deployment (ready for deployment)
 - **Alternative**: Any Python hosting platform with HTTP server support
