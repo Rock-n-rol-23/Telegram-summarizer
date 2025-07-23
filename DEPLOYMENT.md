@@ -15,17 +15,18 @@ This Telegram bot supports multiple deployment modes to ensure reliable operatio
 ## Deployment Options
 
 ### 1. Cloud Run Deployment (HTTP Server + Bot) - RECOMMENDED
-- **Entry Point**: `run.py` (primary), `main.py` (auto-detect), `app.py` (compatibility)
-- **Health Checks**: Available at `/`, `/health`, `/ready`, `/status`, `/ping`
+- **Entry Point**: `simple_server.py` (primary), `run.py`, `app.py` (compatibility)
+- **Health Checks**: Available at `/`, `/health`, `/ready`
 - **Port**: 5000 (configurable via `PORT` environment variable)
-- **Features**: HTTP server with Telegram bot running concurrently
+- **Features**: Simplified HTTP server with Telegram bot running concurrently
 - **Fixed Issues**: 
   - ✓ Removed $file variable dependency
   - ✓ Added explicit entry point files
-  - ✓ Enhanced health check endpoints with JSON responses
-  - ✓ Improved error handling and logging
+  - ✓ Simplified health check endpoints for reliable deployment
+  - ✓ Streamlined server startup process
+  - ✓ Enhanced root endpoint response for Cloud Run compatibility
 
-**Command**: `python run.py`
+**Command**: `python simple_server.py`
 
 ### 2. Background Worker Deployment (Bot Only)
 - **Entry Point**: `simple_bot.py`

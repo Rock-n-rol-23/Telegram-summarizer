@@ -76,11 +76,11 @@ The application follows a modular Python architecture with clear separation of c
 The application supports multiple deployment modes with automatic environment detection:
 
 ### Cloud Run Deployment (Recommended for Production)
-- **Entry Point**: `run.py` (or `main.py`, `app.py`)
-- **Command**: `python run.py`
-- **Features**: HTTP server with health checks + Telegram bot
+- **Entry Point**: `simple_server.py` (primary), `run.py`, `app.py` (compatibility)
+- **Command**: `python simple_server.py`
+- **Features**: Simplified HTTP server with health checks + Telegram bot
 - **Port**: 5000 (configurable via `PORT` environment variable)
-- **Health Endpoints**: `/`, `/health`, `/ready`, `/status`, `/ping`
+- **Health Endpoints**: `/`, `/health`, `/ready`
 
 ### Background Worker Deployment
 - **Entry Point**: `simple_bot.py`
@@ -151,10 +151,11 @@ The architecture prioritizes reliability, user experience, and operational simpl
 ## Recent Changes
 
 ### 2025-07-23: Deployment Ready - All Fixes Applied ✅
-- **Fixed all Cloud Run deployment issues** with enhanced HTTP health check system
+- **Fixed all Cloud Run deployment issues** with simplified HTTP server architecture
+- **Created `simple_server.py`** - streamlined entry point for reliable Cloud Run deployment
 - **Applied all suggested deployment fixes**:
-  ✅ Updated run command to explicitly specify main application file (python main_server.py)
-  ✅ Added comprehensive health check endpoints (/, /health, /ready, /ping, /status) for Cloud Run
+  ✅ Updated run command to explicitly specify main application file (python simple_server.py)
+  ✅ Added streamlined health check endpoints (/, /health, /ready) for Cloud Run
   ✅ Flask dependency already present in pyproject.toml
   ✅ Configured for Cloud Run deployment with HTTP server + Telegram bot
   ✅ Proper polling loop implemented in main execution block with graceful shutdown
