@@ -531,6 +531,34 @@ class SimpleTelegramBot:
             logger.error(f"Ошибка при удалении webhook: {e}")
             return False
 
+    async def setup_bot_commands(self):
+        """Настройка команд бота"""
+        try:
+            commands = [
+                {
+                    "command": "help",
+                    "description": "📖 Помощь по использованию"
+                },
+                {
+                    "command": "stats", 
+                    "description": "📊 Статистика использования"
+                }
+            ]
+            
+            url = f"{self.base_url}/setMyCommands"
+            data = {"commands": json.dumps(commands)}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, data=data) as response:
+                    result = await response.json()
+                    if result.get("ok"):
+                        logger.info("Команды бота установлены")
+                    else:
+                        logger.warning(f"Не удалось установить команды: {result}")
+                        
+        except Exception as e:
+            logger.error(f"Ошибка при установке команд бота: {e}")
+
     async def run(self):
         """Запуск бота"""
         logger.info("Запуск Simple Telegram Bot")
@@ -538,6 +566,9 @@ class SimpleTelegramBot:
         # Очищаем webhook для предотвращения конфликтов 409
         await self.clear_webhook()
         await asyncio.sleep(2)  # Даем время на очистку
+        
+        # Устанавливаем команды бота
+        await self.setup_bot_commands()
         
         # Проверяем подключение к Telegram API
         try:
