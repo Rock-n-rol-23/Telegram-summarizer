@@ -21,7 +21,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python main_entrypoint.py"
+args = "python deploy.py"
 waitForPort = 5000
 
 [deployment]

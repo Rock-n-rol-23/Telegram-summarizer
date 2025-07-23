@@ -29,5 +29,5 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=5 \
     CMD curl -f http://localhost:5000/ || curl -f http://localhost:5000/health || exit 1
 
-# Default command - runs the main entry point (explicit, no $file variable)
-CMD ["python", "main_entrypoint.py"]
+# Default command - runs the main entry point (explicit, no $file variable)  
+CMD ["python", "deploy.py"]

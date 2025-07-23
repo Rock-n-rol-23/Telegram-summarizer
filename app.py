@@ -1,64 +1,58 @@
 #!/usr/bin/env python3
 """
-Flask-style entry point for maximum deployment compatibility
-This ensures compatibility with various deployment platforms expecting app.py
+Flask-style app entry point for deployment compatibility
 """
 
 import os
 import sys
 import asyncio
-import logging
+import threading
 from pathlib import Path
 
-# Add current directory to Python path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add current directory to Python path  
+current_dir = Path(__file__).parent
+sys.path.insert(0, str(current_dir))
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger(__name__)
+# Import Flask for compatibility
+try:
+    from flask import Flask
+    flask_app = Flask(__name__)
+    
+    @flask_app.route('/')
+    def health_check():
+        return "Telegram Summarization Bot - Running", 200
+        
+    @flask_app.route('/health')
+    def health():
+        return {"status": "healthy", "service": "telegram-bot"}, 200
+        
+except ImportError:
+    flask_app = None
 
-def create_flask_app():
-    """Create a Flask app for compatibility (if needed)"""
+def run_telegram_bot():
+    """Run the Telegram bot in background"""
     try:
-        from flask import Flask, jsonify
-        
-        app = Flask(__name__)
-        
-        @app.route('/')
-        def root():
-            return "Telegram Summarization Bot - Flask Ready"
-        
-        @app.route('/health')
-        def health():
-            return jsonify({
-                "status": "healthy",
-                "service": "telegram-bot-flask",
-                "ready": True
-            })
-        
-        return app
+        from cloudrun_optimized import main as cloudrun_main
+        asyncio.run(cloudrun_main())
     except ImportError:
-        logger.warning("Flask not available, using aiohttp server")
-        return None
+        from simple_bot import SimpleTelegramBot
+        bot = SimpleTelegramBot()
+        asyncio.run(bot.run())
 
-async def main():
-    """Main entry point - delegates to appropriate deployment mode"""
-    logger.info("🚀 Starting via app.py entry point")
+def main():
+    """Main entry point with Flask compatibility"""
+    port = int(os.getenv('PORT', 5000))
     
-    # Force Cloud Run mode for app.py
-    os.environ['DEPLOYMENT_TYPE'] = 'cloudrun'
-    
-    # Use the main entry point logic
-    from main_entrypoint import main as main_entry
-    main_entry()
-
-# Flask app instance (for compatibility)
-app = create_flask_app()
+    if flask_app:
+        # Start Telegram bot in background thread
+        bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
+        bot_thread.start()
+        
+        # Run Flask app
+        flask_app.run(host='0.0.0.0', port=port)
+    else:
+        # Run Telegram bot directly
+        run_telegram_bot()
 
 if __name__ == "__main__":
-    # If run directly, use async mode
-    asyncio.run(main())
+    main()

@@ -103,4 +103,33 @@ curl http://localhost:5000/status
 
 ## Deployment is Ready! 🚀
 
+### ОКОНЧАТЕЛЬНОЕ РЕШЕНИЕ ДЛЯ РАЗВЕРТЫВАНИЯ
+
+После всех исправлений создан максимально упрощенный и надежный entry point:
+
+**Файл для развертывания**: `deploy.py`
+- ✅ Максимально простая структура
+- ✅ Минимальные зависимости (только aiohttp)
+- ✅ Прямой HTTP сервер без лишних слоев
+- ✅ Robust error handling и graceful shutdown
+- ✅ Все endpoint'ы протестированы и работают
+
+**Dockerfile обновлен**: `CMD ["python", "deploy.py"]`
+
+**Проверенные endpoint'ы**:
+- `GET /` → "Telegram Bot - Ready for Cloud Run"
+- `GET /health` → `{"status": "healthy", "service": "telegram-bot", "ready": true}`
+- `GET /ready` → `{"status": "healthy", "service": "telegram-bot", "ready": true}`
+
+**Telegram бот**: ✅ Активен и готов обрабатывать сообщения
+
 The application has been successfully fixed and is ready for Cloud Run deployment. All the issues mentioned in the deployment failure have been resolved.
+
+## Инструкции для развертывания:
+
+1. **Для Cloud Run**: Используйте файл `deploy.py` - он максимально оптимизирован
+2. **Dockerfile**: Уже настроен с `CMD ["python", "deploy.py"]`
+3. **Все зависимости**: Присутствуют в `pyproject.toml`
+4. **Environment variables**: TELEGRAM_BOT_TOKEN и GROQ_API_KEY должны быть установлены
+
+**Статус**: ГОТОВ К РАЗВЕРТЫВАНИЮ

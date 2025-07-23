@@ -1,54 +1,127 @@
 #!/usr/bin/env python3
 """
-Auto-detection deployment script
-Automatically chooses deployment mode based on environment
+Deployment entry point - максимально простой для Cloud Run
 """
-
 import os
 import sys
 import asyncio
+import logging
+import signal
+from aiohttp import web
+import json
 
-def detect_deployment_mode():
-    """Detect the deployment environment and choose appropriate mode"""
-    # Check if we're running on Cloud Run
-    if os.getenv('K_SERVICE'):
-        return 'cloudrun'
-    
-    # Check if we're running on Replit
-    if os.getenv('REPLIT_DEPLOYMENT'):
-        return 'cloudrun'  # Use cloudrun mode for Replit deployment
-    
-    # Check for explicit deployment type
-    deployment_type = os.getenv('DEPLOYMENT_TYPE', '').lower()
-    if deployment_type in ['background', 'worker']:
-        return 'background'
-    elif deployment_type in ['cloudrun', 'http', 'server']:
-        return 'cloudrun'
-    
-    # Default to cloudrun for production deployment
-    return 'cloudrun'
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
 
-async def main():
-    """Main deployment function"""
-    deployment_mode = detect_deployment_mode()
-    print(f"Detected deployment mode: {deployment_mode}")
-    
-    if deployment_mode == 'background':
-        print("Starting in Background Worker mode (bot only)...")
+# Глобальные переменные для graceful shutdown
+app = None
+site = None
+bot_task = None
+
+async def health_handler(request):
+    """Обработчик health check"""
+    return web.json_response({
+        'status': 'healthy',
+        'service': 'telegram-bot',
+        'ready': True
+    })
+
+async def root_handler(request):
+    """Корневой обработчик"""
+    return web.Response(text='Telegram Bot - Ready for Cloud Run', status=200)
+
+async def start_telegram_bot():
+    """Запуск Telegram бота"""
+    try:
         from simple_bot import SimpleTelegramBot
         bot = SimpleTelegramBot()
         await bot.run()
-    else:
-        print("Starting in Cloud Run mode (HTTP server + bot)...")
-        from main_server import main
-        await main()
+    except Exception as e:
+        logger.error(f"Ошибка запуска Telegram бота: {e}")
+
+async def create_app():
+    """Создание aiohttp приложения"""
+    app = web.Application()
+    app.router.add_get('/', root_handler)
+    app.router.add_get('/health', health_handler)
+    app.router.add_get('/ready', health_handler)
+    return app
+
+async def init_server():
+    """Инициализация сервера"""
+    global app, site, bot_task
+    
+    port = int(os.getenv('PORT', 5000))
+    
+    # Создание приложения
+    app = await create_app()
+    
+    # Создание и запуск HTTP сервера
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    logger.info(f"HTTP сервер запущен на порту {port}")
+    
+    # Запуск Telegram бота в фоне
+    bot_task = asyncio.create_task(start_telegram_bot())
+    
+    logger.info("Сервер готов к работе")
+    
+    return runner, site
+
+def signal_handler(signum, frame):
+    """Обработчик сигналов завершения"""
+    logger.info(f"Получен сигнал {signum}, завершение работы...")
+    asyncio.create_task(shutdown())
+
+async def shutdown():
+    """Graceful shutdown"""
+    global app, site, bot_task
+    
+    logger.info("Завершение работы сервера...")
+    
+    if bot_task:
+        bot_task.cancel()
+        try:
+            await bot_task
+        except asyncio.CancelledError:
+            pass
+    
+    if site:
+        await site.stop()
+    
+    logger.info("Сервер завершен")
+
+async def main():
+    """Главная функция"""
+    # Установка обработчиков сигналов
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    logger.info("🚀 Запуск Telegram Bot для Cloud Run")
+    logger.info(f"Python: {sys.version}")
+    logger.info(f"Порт: {os.getenv('PORT', '5000')}")
+    
+    # Инициализация сервера
+    runner, site = await init_server()
+    
+    try:
+        # Ожидание завершения
+        while True:
+            await asyncio.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        await shutdown()
+        await runner.cleanup()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Deployment interrupted by user")
-        sys.exit(0)
-    except Exception as e:
-        print(f"Deployment failed: {e}")
-        sys.exit(1)
+    asyncio.run(main())
