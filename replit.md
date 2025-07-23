@@ -367,6 +367,14 @@ All health check failures resolved, HTTP server responding on all endpoints, Tel
 - **Telegram бот активен и готов к работе**
 - **Статус**: ГОТОВ К РАЗВЕРТЫВАНИЮ НА CLOUD RUN
 
+### 2025-07-23: Fixed Duplicate Summarization Bug 🐛
+- **Issue**: Users received multiple summarization responses for single messages
+- **Root Cause**: Duplicated text extraction logic in `handle_update` function
+- **Solution**: Unified text extraction logic to prevent double processing
+- **Fix**: Combined text extraction for regular and forwarded messages into single call
+- **Result**: Summarization now sent only once per message as intended
+- **Status**: Debug completed, bot working correctly
+
 ### 2025-07-22: Enhanced Forwarded Message Support
 - Fixed KeyError when processing forwarded messages with captions
 - Added universal text extraction from both 'text' and 'caption' fields  

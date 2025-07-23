@@ -434,7 +434,7 @@ class SimpleTelegramBot:
                 message = update["message"]
                 logger.info(f"Найдено сообщение в обновлении: {message}")
                 
-                # Проверяем наличие текста в сообщении или пересланном сообщении
+                # Проверяем наличие текста в сообщении (обычном или пересланном)
                 text = None
                 chat_id = message["chat"]["id"]
                 user_id = message["from"]["id"]
@@ -447,19 +447,20 @@ class SimpleTelegramBot:
                         return msg["caption"]
                     return None
                 
-                if "text" in message or "caption" in message:
-                    text = extract_text_from_message(message)
-                    if text:
-                        logger.info(f"Получено сообщение от пользователя {user_id}: '{text[:50]}...'")
-                elif "forward_from" in message or "forward_from_chat" in message or "forward_origin" in message:
-                    # Обработка пересланных сообщений (все форматы)
-                    text = extract_text_from_message(message)
-                    if text:
+                # Извлекаем текст из сообщения (работает для обычных и пересланных)
+                text = extract_text_from_message(message)
+                
+                if text:
+                    # Определяем тип сообщения для логирования
+                    if "forward_from" in message or "forward_from_chat" in message or "forward_origin" in message:
                         logger.info(f"Получено пересланное сообщение от пользователя {user_id}: '{text[:50]}...'")
                     else:
-                        logger.warning(f"Пересланное сообщение не содержит текста")
-                        await self.send_message(chat_id, "❌ Пересланное сообщение не содержит текста для суммаризации.\n\nПожалуйста, пересылайте только текстовые сообщения или сообщения с подписями к изображениям.")
-                        return
+                        logger.info(f"Получено сообщение от пользователя {user_id}: '{text[:50]}...'")
+                elif "forward_from" in message or "forward_from_chat" in message or "forward_origin" in message:
+                    # Пересланное сообщение без текста
+                    logger.warning(f"Пересланное сообщение не содержит текста")
+                    await self.send_message(chat_id, "❌ Пересланное сообщение не содержит текста для суммаризации.\n\nПожалуйста, пересылайте только текстовые сообщения или сообщения с подписями к изображениям.")
+                    return
                 
                 if text:
                     if text.startswith("/"):
