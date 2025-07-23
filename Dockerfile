@@ -28,5 +28,5 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:5000/health')" || exit 1
 
-# Default command - explicitly runs the simple server (fixed $file variable issue)
-CMD ["python", "simple_server.py"]
+# Default command - runs the deployment-ready server
+CMD ["python", "deploy_ready.py"]
