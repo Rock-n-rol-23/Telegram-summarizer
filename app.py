@@ -6,13 +6,13 @@ This ensures compatibility with various deployment platforms that expect app.py
 
 import os
 import sys
+import asyncio
 
 # Set Cloud Run mode explicitly
 os.environ['DEPLOYMENT_TYPE'] = 'cloudrun'
 
-# Import main and run
-from main import main
-import asyncio
+# Import simple server and run
+from simple_server import main
 
 if __name__ == "__main__":
     asyncio.run(main())

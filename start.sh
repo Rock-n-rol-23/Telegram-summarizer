@@ -13,6 +13,6 @@ if [ "$DEPLOYMENT_TYPE" = "background" ]; then
     echo "Starting in Background Worker mode..."
     python simple_bot.py
 else
-    echo "Starting in Cloud Run mode with HTTP server..."
-    python main_server.py
+    echo "Starting in Cloud Run mode with simplified HTTP server..."
+    python simple_server.py
 fi
