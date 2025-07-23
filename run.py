@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """
-Main entry point for deployment
-This script ensures the correct startup sequence for the Telegram bot application
+Simplified run entry point for Cloud Run deployment
+This file explicitly starts the Cloud Run server with HTTP endpoints
 """
 
-import os
 import sys
+import os
+
+# Add current directory to Python path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Import and run main entry point
+from main import main
 import asyncio
-from main_server import main
 
 if __name__ == "__main__":
-    # Ensure the correct Python environment
-    print("Starting Telegram Bot Application...")
-    print(f"Python version: {sys.version}")
-    print(f"Working directory: {os.getcwd()}")
-    
-    # Run the main function
+    # Force Cloud Run mode for deployment
+    os.environ['DEPLOYMENT_TYPE'] = 'cloudrun'
     asyncio.run(main())
