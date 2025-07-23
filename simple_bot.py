@@ -265,6 +265,9 @@ class SimpleTelegramBot:
         
         logger.info(f"Обработка команды /start от пользователя {user.get('id')} в чате {chat_id}")
         
+        # Очищаем любые пользовательские клавиатуры
+        await self.clear_custom_keyboards(chat_id)
+        
         welcome_text = """🤖 Привет! Я бот для создания кратких саммари текста.
 
 Просто отправь мне любой текст или перешли сообщение из любого канала, и я создам его краткое содержание.
@@ -531,9 +534,36 @@ class SimpleTelegramBot:
             logger.error(f"Ошибка при удалении webhook: {e}")
             return False
 
+    async def clear_custom_keyboards(self, chat_id):
+        """Очистка пользовательских клавиатур"""
+        try:
+            url = f"{self.base_url}/sendMessage"
+            data = {
+                "chat_id": chat_id,
+                "text": "🔄 Обновляю интерфейс...",
+                "reply_markup": json.dumps({"remove_keyboard": True})
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, data=data) as response:
+                    result = await response.json()
+                    if result.get("ok"):
+                        # Удаляем сообщение об обновлении после короткой задержки
+                        message_id = result["result"]["message_id"]
+                        await asyncio.sleep(1)
+                        await self.delete_message(chat_id, message_id)
+                        logger.info(f"Пользовательские клавиатуры очищены для чата {chat_id}")
+                    
+        except Exception as e:
+            logger.error(f"Ошибка при очистке клавиатур: {e}")
+
     async def setup_bot_commands(self):
         """Настройка команд бота"""
         try:
+            # Очищаем все существующие команды
+            await self.clear_all_commands()
+            
+            # Устанавливаем только нужные команды
             commands = [
                 {
                     "command": "help",
@@ -552,12 +582,28 @@ class SimpleTelegramBot:
                 async with session.post(url, data=data) as response:
                     result = await response.json()
                     if result.get("ok"):
-                        logger.info("Команды бота установлены")
+                        logger.info("Команды бота установлены: только /help и /stats")
                     else:
                         logger.warning(f"Не удалось установить команды: {result}")
                         
         except Exception as e:
             logger.error(f"Ошибка при установке команд бота: {e}")
+    
+    async def clear_all_commands(self):
+        """Очистка всех команд бота"""
+        try:
+            url = f"{self.base_url}/deleteMyCommands"
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url) as response:
+                    result = await response.json()
+                    if result.get("ok"):
+                        logger.info("Все команды бота удалены")
+                    else:
+                        logger.warning(f"Не удалось удалить команды: {result}")
+                        
+        except Exception as e:
+            logger.error(f"Ошибка при удалении команд: {e}")
 
     async def run(self):
         """Запуск бота"""
