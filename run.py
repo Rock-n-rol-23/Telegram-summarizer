@@ -15,12 +15,5 @@ if __name__ == "__main__":
     print(f"Python version: {sys.version}")
     print(f"Working directory: {os.getcwd()}")
     
-    try:
-        # Run the main server
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Application interrupted by user")
-        sys.exit(0)
-    except Exception as e:
-        print(f"Fatal error: {e}")
-        sys.exit(1)
+    # Run the main function
+    asyncio.run(main())
