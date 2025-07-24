@@ -376,8 +376,9 @@ class SimpleTelegramBot:
                         text = text.strip()
                         
                         # Проверяем, что после нормализации остался смысловой текст
+                        # НЕ фильтруем команды (начинающиеся с /)
                         clean_text = text.replace(' ', '').replace('\n', '').replace('\t', '')
-                        if len(clean_text) < 10:
+                        if not text.startswith('/') and len(clean_text) < 10:
                             logger.warning(f"Текст после нормализации слишком короткий: '{text[:100]}'")
                             return None
                             
@@ -508,7 +509,9 @@ class SimpleTelegramBot:
                             text = text.strip()
                             
                             # Проверяем, что после нормализации остался смысловой текст
-                            if len(text.replace(' ', '').replace('\n', '')) < 10:
+                            # НЕ фильтруем команды (начинающиеся с /)
+                            clean_text = text.replace(' ', '').replace('\n', '').replace('\t', '')
+                            if not text.startswith('/') and len(clean_text) < 10:
                                 logger.warning(f"Текст после нормализации слишком короткий: '{text[:100]}'")
                                 return None
                                 
