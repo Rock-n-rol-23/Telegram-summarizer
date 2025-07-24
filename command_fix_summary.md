@@ -37,3 +37,9 @@ if not text.startswith('/') and len(clean_text) < 10:
 - `/stats` -> ✅ РАБОТАЕТ
 - Короткий текст "Hi" -> ❌ Фильтруется (правильно)
 - Длинный текст -> ✅ Обрабатывается
+
+## Исправлено в двух местах:
+1. **Строка 381**: в функции `handle_text_message()` -> `extract_text_from_message()`
+2. **Строка 514**: в функции `handle_update()` -> `extract_text_from_message()`
+
+Оба места теперь проверяют `not text.startswith('/')` перед фильтрацией по длине.
