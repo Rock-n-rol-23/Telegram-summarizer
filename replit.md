@@ -376,6 +376,14 @@ All health check failures resolved, HTTP server responding on all endpoints, Tel
 - **Result**: Cleaner, more maintainable codebase with single entry point
 - **Status**: Production-ready with minimal file structure
 
+### 2025-07-24: Fixed Command Processing After Text Normalization 🔧
+- **Issue**: Bot stopped responding to `/start`, `/help`, `/stats` commands after text normalization was added
+- **Root Cause**: Commands were filtered out by length validation (commands are shorter than 10 characters)
+- **Solution**: Added exception for commands in text length validation
+- **Implementation**: Modified `extract_text_from_message()` to skip length check for text starting with `/`
+- **Result**: All commands work normally while preserving text normalization for regular messages
+- **Status**: Command processing fully restored
+
 ### 2025-07-24: Fixed Whitespace and Indentation Handling 🛠️
 - **Issue**: Bot errors when processing messages with large amounts of indents/whitespace  
 - **Root Cause**: No text normalization for messages with excessive spaces and line breaks
