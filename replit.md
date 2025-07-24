@@ -376,6 +376,17 @@ All health check failures resolved, HTTP server responding on all endpoints, Tel
 - **Result**: Cleaner, more maintainable codebase with single entry point
 - **Status**: Production-ready with minimal file structure
 
+### 2025-07-24: Fixed Whitespace and Indentation Handling 🛠️
+- **Issue**: Bot errors when processing messages with large amounts of indents/whitespace  
+- **Root Cause**: No text normalization for messages with excessive spaces and line breaks
+- **Solution**: Added comprehensive text normalization at all processing levels
+- **Implementation**: 
+  - Primary normalization in `extract_text_from_message()` - removes excess spaces/newlines
+  - Secondary normalization in `summarize_text()` - removes control characters
+  - Enhanced content validation - checks for meaningful text after cleanup
+- **Result**: Bot now handles messages with any amount of indentation without errors
+- **Status**: Text processing robust against formatting issues
+
 ### 2025-07-23: Fixed Duplicate Summarization Bug 🐛
 - **Issue**: Users received multiple summarization responses for single messages
 - **Root Cause**: Duplicated text extraction logic in `handle_update` function
