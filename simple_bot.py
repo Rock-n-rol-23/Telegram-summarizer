@@ -224,6 +224,21 @@ class SimpleTelegramBot:
             return "❌ Groq API недоступен. Пожалуйста, проверьте настройки."
         
         try:
+            # Дополнительная нормализация текста перед отправкой в API
+            try:
+                import re
+                # Убираем проблемные символы и нормализуем пробелы
+                text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)  # Удаляем управляющие символы
+                text = re.sub(r'\s+', ' ', text)  # Заменяем множественные пробелы
+                text = text.strip()
+                
+                if not text:
+                    return "❌ Текст пуст после нормализации"
+                    
+            except Exception as norm_error:
+                logger.warning(f"Ошибка при дополнительной нормализации: {norm_error}")
+                # Продолжаем с исходным текстом
+            
             target_length = int(len(text) * target_ratio)
             
             prompt = f"""Ты - эксперт по суммаризации текстов. Создай краткое саммари следующего текста на том же языке, что и исходный текст.
@@ -256,6 +271,8 @@ class SimpleTelegramBot:
             
         except Exception as e:
             logger.error(f"Ошибка при суммаризации: {e}")
+            import traceback
+            logger.error(f"Детали ошибки суммаризации: {traceback.format_exc()}")
             return f"❌ Ошибка при обработке текста: {str(e)[:100]}"
     
     async def handle_start_command(self, update: dict):
@@ -336,12 +353,41 @@ class SimpleTelegramBot:
         if message_text:
             text = message_text
         else:
-            # Функция для извлечения текста из сообщения
+            # Функция для извлечения и нормализации текста из сообщения
             def extract_text_from_message(msg):
+                text = None
                 if "text" in msg:
-                    return msg["text"]
+                    text = msg["text"]
                 elif "caption" in msg:
-                    return msg["caption"]
+                    text = msg["caption"]
+                
+                # Нормализация текста для обработки сообщений с отступами
+                if text:
+                    try:
+                        # Убираем лишние пробелы и отступы
+                        import re
+                        # Удаляем избыточные пробелы в начале и конце строк
+                        text = '\n'.join(line.strip() for line in text.split('\n'))
+                        # Заменяем множественные пробелы на одиночные
+                        text = re.sub(r' +', ' ', text)
+                        # Заменяем множественные переносы строк на двойные
+                        text = re.sub(r'\n{3,}', '\n\n', text)
+                        # Убираем пробелы в начале и конце всего текста
+                        text = text.strip()
+                        
+                        # Проверяем, что после нормализации остался смысловой текст
+                        clean_text = text.replace(' ', '').replace('\n', '').replace('\t', '')
+                        if len(clean_text) < 10:
+                            logger.warning(f"Текст после нормализации слишком короткий: '{text[:100]}'")
+                            return None
+                            
+                        logger.info(f"Текст нормализован: было {len(msg.get('text', msg.get('caption', '')))}, стало {len(text)} символов")
+                        return text
+                    except Exception as e:
+                        logger.error(f"Ошибка при нормализации текста: {e}")
+                        # В случае ошибки возвращаем исходный текст
+                        return text.strip() if text else None
+                
                 return None
             
             text = extract_text_from_message(update["message"])
@@ -439,12 +485,40 @@ class SimpleTelegramBot:
                 chat_id = message["chat"]["id"]
                 user_id = message["from"]["id"]
                 
-                # Функция для извлечения текста из сообщения
+                # Функция для извлечения и нормализации текста из сообщения
                 def extract_text_from_message(msg):
+                    text = None
                     if "text" in msg:
-                        return msg["text"]
+                        text = msg["text"]
                     elif "caption" in msg:
-                        return msg["caption"]
+                        text = msg["caption"]
+                    
+                    # Нормализация текста для обработки сообщений с отступами
+                    if text:
+                        try:
+                            # Убираем лишние пробелы и отступы
+                            import re
+                            # Удаляем избыточные пробелы в начале и конце строк
+                            text = '\n'.join(line.strip() for line in text.split('\n'))
+                            # Заменяем множественные пробелы на одиночные
+                            text = re.sub(r' +', ' ', text)
+                            # Заменяем множественные переносы строк на двойные
+                            text = re.sub(r'\n{3,}', '\n\n', text)
+                            # Убираем пробелы в начале и конце всего текста
+                            text = text.strip()
+                            
+                            # Проверяем, что после нормализации остался смысловой текст
+                            if len(text.replace(' ', '').replace('\n', '')) < 10:
+                                logger.warning(f"Текст после нормализации слишком короткий: '{text[:100]}'")
+                                return None
+                                
+                            logger.info(f"Текст нормализован: было {len(msg.get('text', msg.get('caption', '')))}, стало {len(text)} символов")
+                            return text
+                        except Exception as e:
+                            logger.error(f"Ошибка при нормализации текста: {e}")
+                            # В случае ошибки возвращаем исходный текст
+                            return text.strip() if text else None
+                    
                     return None
                 
                 # Извлекаем текст из сообщения (работает для обычных и пересланных)
