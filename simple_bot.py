@@ -361,6 +361,10 @@ class SimpleTelegramBot:
                 elif "caption" in msg:
                     text = msg["caption"]
                 
+                logger.info(f"ОТЛАДКА handle_text_message: Исходный текст: '{text}'")
+                
+                logger.info(f"ОТЛАДКА: Исходный текст: '{text}'")
+                
                 # Нормализация текста для обработки сообщений с отступами
                 if text:
                     try:
@@ -378,7 +382,9 @@ class SimpleTelegramBot:
                         # Проверяем, что после нормализации остался смысловой текст
                         # НЕ фильтруем команды (начинающиеся с /)
                         clean_text = text.replace(' ', '').replace('\n', '').replace('\t', '')
-                        if not text.startswith('/') and len(clean_text) < 10:
+                        if text.startswith('/'):
+                            logger.info(f"Команда обнаружена и пропущена через фильтр: '{text}'")
+                        elif len(clean_text) < 10:
                             logger.warning(f"Текст после нормализации слишком короткий: '{text[:100]}'")
                             return None
                             
@@ -511,7 +517,9 @@ class SimpleTelegramBot:
                             # Проверяем, что после нормализации остался смысловой текст
                             # НЕ фильтруем команды (начинающиеся с /)
                             clean_text = text.replace(' ', '').replace('\n', '').replace('\t', '')
-                            if not text.startswith('/') and len(clean_text) < 10:
+                            if text.startswith('/'):
+                                logger.info(f"Команда обнаружена и пропущена через фильтр: '{text}'")
+                            elif len(clean_text) < 10:
                                 logger.warning(f"Текст после нормализации слишком короткий: '{text[:100]}'")
                                 return None
                                 
@@ -526,6 +534,7 @@ class SimpleTelegramBot:
                 
                 # Извлекаем текст из сообщения (работает для обычных и пересланных)
                 text = extract_text_from_message(message)
+                logger.info(f"ОТЛАДКА: Результат extract_text_from_message: '{text}'")
                 
                 if text:
                     # Определяем тип сообщения для логирования
