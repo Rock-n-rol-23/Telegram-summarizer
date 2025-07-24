@@ -361,9 +361,7 @@ class SimpleTelegramBot:
                 elif "caption" in msg:
                     text = msg["caption"]
                 
-                logger.info(f"ОТЛАДКА handle_text_message: Исходный текст: '{text}'")
-                
-                logger.info(f"ОТЛАДКА: Исходный текст: '{text}'")
+                logger.info(f"DEBUG handle_text_message: Исходный текст: '{text}'")
                 
                 # Нормализация текста для обработки сообщений с отступами
                 if text:
@@ -383,7 +381,7 @@ class SimpleTelegramBot:
                         # НЕ фильтруем команды (начинающиеся с /)
                         clean_text = text.replace(' ', '').replace('\n', '').replace('\t', '')
                         if text.startswith('/'):
-                            logger.info(f"Команда обнаружена и пропущена через фильтр: '{text}'")
+                            logger.info(f"DEBUG: Команда обнаружена и пропущена через фильтр в handle_text_message: '{text}'")
                         elif len(clean_text) < 10:
                             logger.warning(f"Текст после нормализации слишком короткий: '{text[:100]}'")
                             return None
@@ -493,12 +491,19 @@ class SimpleTelegramBot:
                 user_id = message["from"]["id"]
                 
                 # Функция для извлечения и нормализации текста из сообщения
-                def extract_text_from_message(msg):
+                def extract_text_from_message_handle_update(msg):
                     text = None
                     if "text" in msg:
                         text = msg["text"]
                     elif "caption" in msg:
                         text = msg["caption"]
+                    
+                    logger.info(f"DEBUG handle_update extract: Исходный текст: '{text}'")
+                    
+                    # Для команд - НЕ нормализуем, возвращаем как есть
+                    if text and text.startswith('/'):
+                        logger.info(f"DEBUG handle_update extract: Команда обнаружена - возвращаем как есть: '{text}'")
+                        return text.strip()
                     
                     # Нормализация текста для обработки сообщений с отступами
                     if text:
@@ -514,12 +519,9 @@ class SimpleTelegramBot:
                             # Убираем пробелы в начале и конце всего текста
                             text = text.strip()
                             
-                            # Проверяем, что после нормализации остался смысловой текст
-                            # НЕ фильтруем команды (начинающиеся с /)
+                            # Проверяем длину для обычных текстов (не команд)
                             clean_text = text.replace(' ', '').replace('\n', '').replace('\t', '')
-                            if text.startswith('/'):
-                                logger.info(f"Команда обнаружена и пропущена через фильтр: '{text}'")
-                            elif len(clean_text) < 10:
+                            if len(clean_text) < 10:
                                 logger.warning(f"Текст после нормализации слишком короткий: '{text[:100]}'")
                                 return None
                                 
@@ -533,8 +535,8 @@ class SimpleTelegramBot:
                     return None
                 
                 # Извлекаем текст из сообщения (работает для обычных и пересланных)
-                text = extract_text_from_message(message)
-                logger.info(f"ОТЛАДКА: Результат extract_text_from_message: '{text}'")
+                text = extract_text_from_message_handle_update(message)
+                logger.info(f"DEBUG handle_update: Результат extract_text_from_message: '{text}'")
                 
                 if text:
                     # Определяем тип сообщения для логирования
@@ -549,9 +551,10 @@ class SimpleTelegramBot:
                     return
                 
                 if text:
+                    logger.info(f"DEBUG: Текст получен для обработки: '{text}'")
                     if text.startswith("/"):
                         # Обработка команд
-                        logger.info(f"Обработка команды: {text}")
+                        logger.info(f"DEBUG: Начинаю обработку команды: {text}")
                         if text == "/start":
                             await self.handle_start_command(update)
                         elif text == "/help":
@@ -569,7 +572,7 @@ class SimpleTelegramBot:
                         logger.info(f"Обработка текстового сообщения от пользователя {user_id}")
                         await self.handle_text_message(update, message_text=text)
                 else:
-                    logger.warning(f"Сообщение не содержит текста: {message}")
+                    logger.warning(f"DEBUG: Сообщение не содержит текста после extract_text_from_message: {message}")
                     # Проверяем, есть ли другие типы контента
                     if any(key in message for key in ['photo', 'video', 'document', 'audio', 'voice', 'sticker']):
                         await self.send_message(chat_id, "❌ Данный тип сообщения не поддерживается.\n\nБот работает только с текстовыми сообщениями. Пожалуйста, отправьте или перешлите текстовое сообщение для суммаризации.")
