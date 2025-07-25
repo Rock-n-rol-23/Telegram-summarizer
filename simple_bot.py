@@ -327,20 +327,14 @@ class SimpleTelegramBot:
 • Отправьте текст → получите сжатие 30%
 • Перешлите сообщение → автоматическая обработка
 
-⚡ **БЫСТРЫЕ КОМАНДЫ:**
+⚡ **КОМАНДЫ СУММАРИЗАЦИИ:**
 • /10 → максимальное сжатие (10%)
 • /30 → сбалансированное сжатие (30%)  
 • /50 → умеренное сжатие (50%)
-• /quick → показать все способы
 
 💬 **ТЕКСТОВЫЕ КОМАНДЫ:**
 • Отправьте: 10%, 30% или 50%
-• Затем: bullets, paragraph или keywords
 • Потом отправьте текст для обработки
-
-⚙️ **НАСТРАИВАЕМАЯ СУММАРИЗАЦИЯ:**
-• /summarize → полное меню с кнопками
-• Выбор сжатия и формата через интерфейс
 
 📊 **ДРУГИЕ КОМАНДЫ:**
 • /stats → ваша статистика
@@ -373,85 +367,11 @@ class SimpleTelegramBot:
         
         await self.send_message(chat_id, stats_text)
     
-    async def handle_summarize_command(self, update: dict):
-        """Обработка команды /summarize для настраиваемой суммаризации"""
-        chat_id = update["message"]["chat"]["id"]
-        user_id = update["message"]["from"]["id"]
-        
-        logger.info(f"🚀 SUMMARIZE COMMAND: Обработка команды /summarize от пользователя {user_id} в чате {chat_id}")
-        
-        # Сбрасываем состояние пользователя
-        self.user_states[user_id] = {"step": "compression_level"}
-        self.user_settings[user_id] = {}
-        self.user_messages_buffer[user_id] = []
-        
-        logger.info(f"🔧 SUMMARIZE COMMAND: Инициализированы словари для пользователя {user_id}")
-        logger.info(f"🔧 SUMMARIZE COMMAND: user_states[{user_id}] = {self.user_states[user_id]}")
-        logger.info(f"🔧 SUMMARIZE COMMAND: user_settings[{user_id}] = {self.user_settings[user_id]}")
-        logger.info(f"🔧 SUMMARIZE COMMAND: user_messages_buffer[{user_id}] = {self.user_messages_buffer[user_id]}")
-        
-        logger.info(f"📋 SUMMARIZE COMMAND: Отправка меню выбора уровня сжатия в чат {chat_id}")
-        menu_result = await self.send_compression_level_menu(chat_id)
-        logger.info(f"📤 SUMMARIZE COMMAND: Результат отправки меню: {menu_result}")
-        
-        # Добавляем резервные инструкции
-        backup_text = """💡 Если кнопки не работают, отправьте текстом:
-• "10%" - для максимального сжатия
-• "30%" - для сбалансированного сжатия  
-• "50%" - для умеренного сжатия"""
-        
-        backup_result = await self.send_message(chat_id, backup_text)
-        logger.info(f"🔄 SUMMARIZE COMMAND: Резервные инструкции отправлены: {backup_result}")
+
     
-    async def send_compression_level_menu(self, chat_id: int):
-        """Отправка меню выбора уровня сжатия"""
-        logger.info(f"📋 COMPRESSION MENU: Подготовка меню выбора уровня сжатия для чата {chat_id}")
-        
-        text = """⚙️ Настройка суммаризации
 
-Выберите уровень сжатия текста:
-
-🔥 10% - Максимальное сжатие (только самое важное)
-📝 30% - Сбалансированное сжатие (основные моменты)
-📄 50% - Умеренное сжатие (подробное изложение)"""
-        
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {"text": "🔥 10%", "callback_data": "compression_10"},
-                    {"text": "📝 30%", "callback_data": "compression_30"},
-                    {"text": "📄 50%", "callback_data": "compression_50"}
-                ]
-            ]
-        }
-        
-        logger.info(f"📋 COMPRESSION MENU: Keyboard data: {json.dumps(keyboard, ensure_ascii=False)}")
-        logger.info(f"📋 COMPRESSION MENU: Отправка сообщения с inline-клавиатурой в чат {chat_id}")
-        
-        result = await self.send_message(chat_id, text, reply_markup=keyboard)
-        logger.info(f"📤 COMPRESSION MENU: Результат отправки: {result}")
-        
-
-        
-        return result
     
-    async def send_format_menu(self, chat_id: int):
-        """Отправка меню выбора формата результата"""
-        text = """📋 Выберите формат результата:
 
-• Маркированный список - ключевые пункты с bullet points
-📄 Связный абзац - краткое изложение в виде текста
-🏷️ Ключевые слова - список важных терминов"""
-        
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "• Маркированный список", "callback_data": "format_bullets"}],
-                [{"text": "📄 Связный абзац", "callback_data": "format_paragraph"}],
-                [{"text": "🏷️ Ключевые слова", "callback_data": "format_keywords"}]
-            ]
-        }
-        
-        await self.send_message(chat_id, text, reply_markup=keyboard)
     
     async def send_text_request(self, chat_id: int, user_id: int):
         """Запрос текста для суммаризации"""
@@ -478,105 +398,12 @@ class SimpleTelegramBot:
 
 💡 Для отмены используйте команду /start"""
         
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "❌ Отменить", "callback_data": "cancel_summarize"}]
-            ]
-        }
-        
-        await self.send_message(chat_id, text, reply_markup=keyboard)
+        await self.send_message(chat_id, text)
         
         # Устанавливаем состояние ожидания текста
         self.user_states[user_id]["step"] = "waiting_text"
     
-    async def handle_callback_query(self, callback_query: dict):
-        """Обработка нажатий на inline-клавиатуру"""
-        try:
-            logger.info(f"🔍 DEBUG: Получен callback_query целиком: {json.dumps(callback_query, ensure_ascii=False, indent=2)}")
-            
-            chat_id = callback_query["message"]["chat"]["id"]
-            user_id = callback_query["from"]["id"]
-            data = callback_query["data"]
-            message_id = callback_query["message"]["message_id"]
-            callback_id = callback_query["id"]
-            
-            logger.info(f"🎯 CALLBACK PROCESSING: user_id={user_id}, chat_id={chat_id}, data='{data}', message_id={message_id}, callback_id={callback_id}")
-            
-            # Проверяем состояния пользователя перед обработкой
-            logger.info(f"📊 CALLBACK STATE CHECK: Текущие состояния пользователя {user_id}:")
-            logger.info(f"📊 user_states.get({user_id}): {self.user_states.get(user_id, 'NOT_FOUND')}")
-            logger.info(f"📊 user_settings.get({user_id}): {self.user_settings.get(user_id, 'NOT_FOUND')}")
-            logger.info(f"📊 user_messages_buffer.get({user_id}): {self.user_messages_buffer.get(user_id, 'NOT_FOUND')}")
-            
-            # Подтверждаем получение callback
-            logger.info(f"📞 Отправка answer_callback_query для {callback_id}")
-            answer_result = await self.answer_callback_query(callback_id)
-            logger.info(f"✅ Результат answer_callback_query: {answer_result}")
-            
-            if data.startswith("compression_"):
-                logger.info(f"🔧 COMPRESSION: Обработка выбора уровня сжатия")
-                # Выбор уровня сжатия
-                compression_level = data.split("_")[1]
-                logger.info(f"📊 Выбран уровень сжатия: {compression_level}%")
-                
-                self.user_settings[user_id] = {"compression": compression_level}
-                self.user_states[user_id]["step"] = "format_selection"
-                logger.info(f"💾 Сохранены настройки пользователя {user_id}: {self.user_settings[user_id]}")
-                logger.info(f"🔄 Установлен статус пользователя {user_id}: {self.user_states[user_id]}")
-                
-                # Обновляем сообщение с новым меню
-                logger.info(f"✏️ Обновление сообщения {message_id} в чате {chat_id}")
-                edit_result = await self.edit_message(chat_id, message_id, "✅ Уровень сжатия выбран")
-                logger.info(f"📝 Результат edit_message: {edit_result}")
-                
-                logger.info(f"📋 Отправка меню выбора формата в чат {chat_id}")
-                format_result = await self.send_format_menu(chat_id)
-                logger.info(f"📤 Результат send_format_menu: {format_result}")
-                
-            elif data.startswith("format_"):
-                logger.info(f"📄 FORMAT: Обработка выбора формата результата")
-                # Выбор формата результата
-                format_type = data.split("_")[1]
-                logger.info(f"🎨 Выбран формат: {format_type}")
-                
-                self.user_settings[user_id]["format"] = format_type
-                logger.info(f"💾 Обновлены настройки пользователя {user_id}: {self.user_settings[user_id]}")
-                
-                # Обновляем сообщение и переходим к запросу текста
-                logger.info(f"✏️ Обновление сообщения {message_id} с подтверждением выбора формата")
-                edit_result = await self.edit_message(chat_id, message_id, "✅ Формат результата выбран")
-                logger.info(f"📝 Результат edit_message: {edit_result}")
-                
-                logger.info(f"📝 Отправка запроса текста пользователю {user_id}")
-                text_request_result = await self.send_text_request(chat_id, user_id)
-                logger.info(f"📤 Результат send_text_request: {text_request_result}")
-                
-            elif data == "process_now":
-                # Обработка собранных сообщений
-                await self.edit_message(chat_id, message_id, "🚀 Начинаю обработку...")
-                await self.process_custom_summarization(chat_id, user_id)
-                
-            elif data == "cancel_summarize":
-                # Отмена настраиваемой суммаризации
-                if user_id in self.user_states:
-                    del self.user_states[user_id]
-                if user_id in self.user_settings:
-                    del self.user_settings[user_id]
-                if user_id in self.user_messages_buffer:
-                    del self.user_messages_buffer[user_id]
-                    
-                await self.edit_message(chat_id, message_id, "❌ Настраиваемая суммаризация отменена")
-                await self.send_message(chat_id, "Используйте /start для возврата в главное меню или просто отправьте текст для быстрой суммаризации.")
-                
-        except Exception as e:
-            logger.error(f"❌ CALLBACK ERROR: Критическая ошибка обработки callback query: {e}")
-            import traceback
-            logger.error(f"🔍 CALLBACK TRACEBACK: {traceback.format_exc()}")
-            # Пытаемся отправить ошибку пользователю
-            try:
-                await self.answer_callback_query(callback_query.get("id", ""), "Произошла ошибка при обработке")
-            except:
-                logger.error("❌ Не удалось отправить error callback response")
+
     
     async def handle_custom_summarize_text(self, update: dict, text: str):
         """Обработка текста в режиме настраиваемой суммаризации"""
@@ -602,13 +429,7 @@ class SimpleTelegramBot:
                 await self.send_message(chat_id, 
                     f"📝 Собрано сообщений: {len(self.user_messages_buffer[user_id])}\n"
                     f"📊 Общий объем: {total_chars:,} символов\n\n"
-                    f"Отправьте еще текст или нажмите кнопку для обработки:",
-                    reply_markup={
-                        "inline_keyboard": [[
-                            {"text": "🚀 Обработать сейчас", "callback_data": "process_now"},
-                            {"text": "❌ Отменить", "callback_data": "cancel_summarize"}
-                        ]]
-                    })
+                    f"Отправьте текст: 'ok' для обработки или еще текст для добавления")
             else:
                 # Слишком мало символов
                 await self.send_message(chat_id, 
@@ -751,20 +572,7 @@ class SimpleTelegramBot:
         user_id = user["id"]
         username = user.get("username", "")
         
-        # Проверяем резервные команды для настраиваемой суммаризации
-        if message_text and user_id in self.user_states and self.user_states[user_id].get("step") == "compression_level":
-            if message_text.strip() in ["10%", "30%", "50%"]:
-                logger.info(f"🔄 BACKUP COMMAND: Пользователь {user_id} выбрал уровень сжатия текстом: {message_text.strip()}")
-                # Имитируем callback для обработки
-                import time
-                fake_callback = {
-                    "id": f"manual_{int(time.time() * 1000)}",
-                    "from": {"id": user_id},
-                    "message": {"chat": {"id": chat_id}, "message_id": 1},
-                    "data": f"compression_{message_text.strip().replace('%', '')}"
-                }
-                await self.handle_callback_query(fake_callback)
-                return
+
         
         # Используем переданный текст или извлекаем из сообщения
         if message_text:
@@ -978,10 +786,7 @@ class SimpleTelegramBot:
                             await self.handle_help_command(update)
                         elif text == "/stats":
                             await self.handle_stats_command(update)
-                        elif text == "/summarize":
-                            await self.handle_summarize_command(update)
-                        elif text == "/quick":
-                            await self.handle_quick_command(update)
+
                         elif text in ["/10", "/10%"]:
                             await self.handle_direct_compression_command(update, "10")
                         elif text in ["/30", "/30%"]:
@@ -1002,48 +807,29 @@ class SimpleTelegramBot:
                             # Обработка выбора уровня сжатия текстом
                             if current_step == "compression_level" and text.strip() in ["10%", "30%", "50%"]:
                                 compression_level = text.strip().replace("%", "")
-                                self.user_settings[user_id] = {"compression": compression_level}
-                                self.user_states[user_id]["step"] = "format_selection"
-                                
-                                format_text = f"""✅ Выбрано сжатие: {compression_level}%
-
-📋 Теперь выберите формат:
-
-**Отправьте одно из:**
-• **bullets** - маркированный список
-• **paragraph** - связный абзац
-• **keywords** - ключевые слова"""
-                                
-                                await self.send_message(chat_id, format_text)
-                                return
-                            
-                            # Обработка выбора формата текстом
-                            elif current_step == "format_selection" and text.strip().lower() in ["bullets", "paragraph", "keywords"]:
-                                format_type = text.strip().lower()
-                                self.user_settings[user_id]["format"] = format_type
+                                self.user_settings[user_id] = {"compression": compression_level, "format": "bullets"}
+                                self.user_states[user_id]["step"] = "waiting_text"
                                 await self.send_text_request(chat_id, user_id)
                                 return
                             
                             # Обработка текста в режиме ожидания
                             elif current_step == "waiting_text":
-                                await self.handle_custom_summarize_text(update, text)
-                                return
+                                if text.strip().lower() == "ok" and user_id in self.user_messages_buffer and len(self.user_messages_buffer[user_id]) > 0:
+                                    # Обработка собранных сообщений
+                                    await self.process_custom_summarization(chat_id, user_id)
+                                    return
+                                else:
+                                    await self.handle_custom_summarize_text(update, text)
+                                    return
 
                         # Обработка процентов без предварительной настройки (быстрый режим)
                         if text.strip() in ["10%", "30%", "50%"] and user_id not in self.user_states:
                             compression_level = text.strip().replace("%", "")
-                            self.user_states[user_id] = {"step": "format_selection"}
-                            self.user_settings[user_id] = {"compression": compression_level}
+                            self.user_states[user_id] = {"step": "waiting_text"}
+                            self.user_settings[user_id] = {"compression": compression_level, "format": "bullets"}
                             self.user_messages_buffer[user_id] = []
                             
-                            format_text = f"""✅ Выбрано сжатие: {compression_level}%
-
-📋 Выберите формат, отправив:
-• **bullets** - маркированный список
-• **paragraph** - связный абзац
-• **keywords** - ключевые слова"""
-                            
-                            await self.send_message(chat_id, format_text)
+                            await self.send_text_request(chat_id, user_id)
                             return
 
                         # Проверяем, находится ли пользователь в режиме настраиваемой суммаризации
@@ -1060,13 +846,7 @@ class SimpleTelegramBot:
                         await self.send_message(chat_id, "❌ Данный тип сообщения не поддерживается.\n\nБот работает только с текстовыми сообщениями. Пожалуйста, отправьте или перешлите текстовое сообщение для суммаризации.")
                     else:
                         await self.send_message(chat_id, "❌ Сообщение не содержит текста.\n\nПожалуйста, отправьте текстовое сообщение для суммаризации.")
-            elif "callback_query" in update:
-                logger.info(f"🎯 MAIN HANDLER: Обнаружен callback_query в update")
-                logger.info(f"🎯 MAIN HANDLER: callback_query data: {update['callback_query'].get('data', 'NO_DATA')}")
-                # Обработка нажатий на inline-клавиатуру
-                await self.handle_callback_query(update["callback_query"])
-                logger.info(f"✅ MAIN HANDLER: Завершена обработка callback_query")
-                return
+
             else:
                 logger.warning(f"Неизвестный тип обновления: {update}")
                         
@@ -1080,7 +860,7 @@ class SimpleTelegramBot:
         url = f"{self.base_url}/getUpdates"
         params = {
             "timeout": timeout,
-            "allowed_updates": ["message", "callback_query"]
+            "allowed_updates": ["message"]
         }
         
         if offset:
@@ -1094,14 +874,11 @@ class SimpleTelegramBot:
                 async with session.get(url, params=params) as response:
                     result = await response.json()
                     
-                    # Проверяем наличие callback_query в полученных обновлениях
                     if result and result.get("ok"):
                         update_list = result.get("result", [])
                         logger.info(f"🔄 GET_UPDATES: Получено {len(update_list)} обновлений")
                         for update in update_list:
-                            if "callback_query" in update:
-                                logger.info(f"🎯 GET_UPDATES: ПОЛУЧЕН CALLBACK_QUERY: {json.dumps(update['callback_query'], ensure_ascii=False)}")
-                            elif "message" in update:
+                            if "message" in update:
                                 msg = update["message"]
                                 logger.info(f"📨 GET_UPDATES: Получено сообщение от {msg.get('from', {}).get('id', 'unknown')}: {msg.get('text', msg.get('caption', 'no_text'))[:50]}")
                     
@@ -1170,14 +947,7 @@ class SimpleTelegramBot:
                     "command": "stats", 
                     "description": "📊 Статистика использования"
                 },
-                {
-                    "command": "summarize",
-                    "description": "⚙️ Настраиваемая суммаризация"
-                },
-                {
-                    "command": "quick",
-                    "description": "⚡ Быстрые способы суммаризации"
-                },
+
                 {
                     "command": "10",
                     "description": "🔥 Максимальное сжатие (10%)"
@@ -1199,7 +969,7 @@ class SimpleTelegramBot:
                 async with session.post(url, data=data) as response:
                     result = await response.json()
                     if result.get("ok"):
-                        logger.info("Команды бота установлены: /help, /stats, /summarize, /quick, /10, /30, /50")
+                        logger.info("Команды бота установлены: /help, /stats, /10, /30, /50")
                     else:
                         logger.warning(f"Не удалось установить команды: {result}")
                         
@@ -1286,59 +1056,9 @@ class SimpleTelegramBot:
                 logger.error(f"Ошибка в основном цикле: {e}")
                 await asyncio.sleep(5)
     
-    async def answer_callback_query(self, callback_query_id: str, text: str = None):
-        """Подтверждение получения callback query"""
-        try:
-            url = f"{self.base_url}/answerCallbackQuery"
-            data = {"callback_query_id": callback_query_id}
-            if text:
-                data["text"] = text
-            
-            logger.info(f"📞 ANSWER_CALLBACK: Отправка answerCallbackQuery для {callback_query_id}")
-            logger.info(f"📞 ANSWER_CALLBACK: URL: {url}")
-            logger.info(f"📞 ANSWER_CALLBACK: Data: {json.dumps(data, ensure_ascii=False)}")
-                
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=data) as response:
-                    logger.info(f"📞 ANSWER_CALLBACK: HTTP status: {response.status}")
-                    result = await response.json()
-                    logger.info(f"📞 ANSWER_CALLBACK: Response: {json.dumps(result, ensure_ascii=False)}")
-                    success = result.get("ok", False)
-                    logger.info(f"📞 ANSWER_CALLBACK: Success: {success}")
-                    return success
-        except Exception as e:
-            logger.error(f"❌ ANSWER_CALLBACK ERROR: Ошибка подтверждения callback query: {e}")
-            import traceback
-            logger.error(f"🔍 ANSWER_CALLBACK TRACEBACK: {traceback.format_exc()}")
-            return False
+
     
-    async def edit_message(self, chat_id: int, message_id: int, text: str, reply_markup: dict = None):
-        """Редактирование существующего сообщения"""
-        try:
-            url = f"{self.base_url}/editMessageText"
-            data = {
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "text": text
-            }
-            if reply_markup:
-                data["reply_markup"] = reply_markup  # Убираем json.dumps()
-            
-            async with aiohttp.ClientSession() as session:
-                # Используем json=data когда есть reply_markup, иначе data=data
-                if reply_markup:
-                    async with session.post(url, json=data) as response:
-                        result = await response.json()
-                else:
-                    async with session.post(url, data=data) as response:
-                        result = await response.json()
-                        
-                return result.get("result") if result.get("ok") else None
-        except Exception as e:
-            logger.error(f"❌ EDIT_MESSAGE ERROR: Ошибка редактирования сообщения: {e}")
-            import traceback
-            logger.error(f"🔍 EDIT_MESSAGE TRACEBACK: {traceback.format_exc()}")
-            return None
+
     
     async def delete_message(self, chat_id: int, message_id: int):
         """Удаление сообщения"""
@@ -1357,37 +1077,7 @@ class SimpleTelegramBot:
             logger.error(f"Ошибка удаления сообщения: {e}")
             return False
     
-    async def handle_quick_command(self, update: dict):
-        """Обработка команды /quick для быстрой настройки"""
-        chat_id = update["message"]["chat"]["id"]
-        user_id = update["message"]["from"]["id"]
-        
-        # Очищаем состояние пользователя
-        if user_id in self.user_states:
-            del self.user_states[user_id]
-        if user_id in self.user_settings:
-            del self.user_settings[user_id]
-        if user_id in self.user_messages_buffer:
-            del self.user_messages_buffer[user_id]
-        
-        quick_text = """⚡ Быстрая суммаризация
 
-🎯 **Способ 1: Прямые команды**
-/10 - максимальное сжатие (10%)
-/30 - сбалансированное сжатие (30%)
-/50 - умеренное сжатие (50%)
-
-💬 **Способ 2: Текстовые команды**
-Отправьте процент: 10%, 30%, 50%
-Затем формат: bullets, paragraph, keywords
-Потом отправьте ваш текст
-
-📝 **Способ 3: Простая отправка**
-Просто отправьте текст - получите сжатие 30%
-
-Выберите удобный способ!"""
-        
-        await self.send_message(chat_id, quick_text)
 
     async def handle_direct_compression_command(self, update: dict, compression_level: str):
         """Обработка прямых команд сжатия /10, /30, /50"""
@@ -1401,26 +1091,11 @@ class SimpleTelegramBot:
         self.user_settings[user_id] = {"compression": compression_level}
         self.user_messages_buffer[user_id] = []
         
-        format_text = f"""✅ Выбрано сжатие: {compression_level}%
-
-📋 Выберите формат результата:
-
-**Отправьте одно из:**
-• **bullets** - маркированный список
-• **paragraph** - связный абзац  
-• **keywords** - ключевые слова
-
-Или используйте кнопки ниже:"""
+        # Устанавливаем состояние ожидания текста сразу с настройками по умолчанию
+        self.user_states[user_id]["step"] = "waiting_text"
+        self.user_settings[user_id]["format"] = "bullets"  # Всегда маркированный список
         
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "• Маркированный список", "callback_data": "format_bullets"}],
-                [{"text": "📄 Связный абзац", "callback_data": "format_paragraph"}],
-                [{"text": "🏷️ Ключевые слова", "callback_data": "format_keywords"}]
-            ]
-        }
-        
-        await self.send_message(chat_id, format_text, reply_markup=keyboard)
+        await self.send_text_request(chat_id, user_id)
 
 async def main():
     """Главная функция"""
