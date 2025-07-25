@@ -177,7 +177,7 @@ class SimpleTelegramBot:
         if parse_mode:
             data["parse_mode"] = parse_mode
         if reply_markup:
-            data["reply_markup"] = json.dumps(reply_markup)
+            data["reply_markup"] = reply_markup  # Убираем json.dumps, aiohttp сам сериализует
         
         try:
             async with aiohttp.ClientSession() as session:
@@ -364,17 +364,26 @@ class SimpleTelegramBot:
         chat_id = update["message"]["chat"]["id"]
         user_id = update["message"]["from"]["id"]
         
-        logger.info(f"Обработка команды /summarize от пользователя {user_id}")
+        logger.info(f"🚀 SUMMARIZE COMMAND: Обработка команды /summarize от пользователя {user_id} в чате {chat_id}")
         
         # Сбрасываем состояние пользователя
         self.user_states[user_id] = {"step": "compression_level"}
         self.user_settings[user_id] = {}
         self.user_messages_buffer[user_id] = []
         
-        await self.send_compression_level_menu(chat_id)
+        logger.info(f"🔧 SUMMARIZE COMMAND: Инициализированы словари для пользователя {user_id}")
+        logger.info(f"🔧 SUMMARIZE COMMAND: user_states[{user_id}] = {self.user_states[user_id]}")
+        logger.info(f"🔧 SUMMARIZE COMMAND: user_settings[{user_id}] = {self.user_settings[user_id]}")
+        logger.info(f"🔧 SUMMARIZE COMMAND: user_messages_buffer[{user_id}] = {self.user_messages_buffer[user_id]}")
+        
+        logger.info(f"📋 SUMMARIZE COMMAND: Отправка меню выбора уровня сжатия в чат {chat_id}")
+        menu_result = await self.send_compression_level_menu(chat_id)
+        logger.info(f"📤 SUMMARIZE COMMAND: Результат отправки меню: {menu_result}")
     
     async def send_compression_level_menu(self, chat_id: int):
         """Отправка меню выбора уровня сжатия"""
+        logger.info(f"📋 COMPRESSION MENU: Подготовка меню выбора уровня сжатия для чата {chat_id}")
+        
         text = """⚙️ Настройка суммаризации
 
 Выберите уровень сжатия текста:
@@ -393,7 +402,12 @@ class SimpleTelegramBot:
             ]
         }
         
-        await self.send_message(chat_id, text, reply_markup=keyboard)
+        logger.info(f"📋 COMPRESSION MENU: Keyboard data: {json.dumps(keyboard, ensure_ascii=False)}")
+        logger.info(f"📋 COMPRESSION MENU: Отправка сообщения с inline-клавиатурой в чат {chat_id}")
+        
+        result = await self.send_message(chat_id, text, reply_markup=keyboard)
+        logger.info(f"📤 COMPRESSION MENU: Результат отправки: {result}")
+        return result
     
     async def send_format_menu(self, chat_id: int):
         """Отправка меню выбора формата результата"""
@@ -452,34 +466,64 @@ class SimpleTelegramBot:
     async def handle_callback_query(self, callback_query: dict):
         """Обработка нажатий на inline-клавиатуру"""
         try:
+            logger.info(f"🔍 DEBUG: Получен callback_query целиком: {json.dumps(callback_query, ensure_ascii=False, indent=2)}")
+            
             chat_id = callback_query["message"]["chat"]["id"]
             user_id = callback_query["from"]["id"]
             data = callback_query["data"]
             message_id = callback_query["message"]["message_id"]
+            callback_id = callback_query["id"]
             
-            logger.info(f"Callback query от пользователя {user_id}: {data}")
+            logger.info(f"🎯 CALLBACK PROCESSING: user_id={user_id}, chat_id={chat_id}, data='{data}', message_id={message_id}, callback_id={callback_id}")
+            
+            # Проверяем состояния пользователя перед обработкой
+            logger.info(f"📊 CALLBACK STATE CHECK: Текущие состояния пользователя {user_id}:")
+            logger.info(f"📊 user_states.get({user_id}): {self.user_states.get(user_id, 'NOT_FOUND')}")
+            logger.info(f"📊 user_settings.get({user_id}): {self.user_settings.get(user_id, 'NOT_FOUND')}")
+            logger.info(f"📊 user_messages_buffer.get({user_id}): {self.user_messages_buffer.get(user_id, 'NOT_FOUND')}")
             
             # Подтверждаем получение callback
-            await self.answer_callback_query(callback_query["id"])
+            logger.info(f"📞 Отправка answer_callback_query для {callback_id}")
+            answer_result = await self.answer_callback_query(callback_id)
+            logger.info(f"✅ Результат answer_callback_query: {answer_result}")
             
             if data.startswith("compression_"):
+                logger.info(f"🔧 COMPRESSION: Обработка выбора уровня сжатия")
                 # Выбор уровня сжатия
                 compression_level = data.split("_")[1]
+                logger.info(f"📊 Выбран уровень сжатия: {compression_level}%")
+                
                 self.user_settings[user_id] = {"compression": compression_level}
                 self.user_states[user_id]["step"] = "format_selection"
+                logger.info(f"💾 Сохранены настройки пользователя {user_id}: {self.user_settings[user_id]}")
+                logger.info(f"🔄 Установлен статус пользователя {user_id}: {self.user_states[user_id]}")
                 
                 # Обновляем сообщение с новым меню
-                await self.edit_message(chat_id, message_id, "✅ Уровень сжатия выбран")
-                await self.send_format_menu(chat_id)
+                logger.info(f"✏️ Обновление сообщения {message_id} в чате {chat_id}")
+                edit_result = await self.edit_message(chat_id, message_id, "✅ Уровень сжатия выбран")
+                logger.info(f"📝 Результат edit_message: {edit_result}")
+                
+                logger.info(f"📋 Отправка меню выбора формата в чат {chat_id}")
+                format_result = await self.send_format_menu(chat_id)
+                logger.info(f"📤 Результат send_format_menu: {format_result}")
                 
             elif data.startswith("format_"):
+                logger.info(f"📄 FORMAT: Обработка выбора формата результата")
                 # Выбор формата результата
                 format_type = data.split("_")[1]
+                logger.info(f"🎨 Выбран формат: {format_type}")
+                
                 self.user_settings[user_id]["format"] = format_type
+                logger.info(f"💾 Обновлены настройки пользователя {user_id}: {self.user_settings[user_id]}")
                 
                 # Обновляем сообщение и переходим к запросу текста
-                await self.edit_message(chat_id, message_id, "✅ Формат результата выбран")
-                await self.send_text_request(chat_id, user_id)
+                logger.info(f"✏️ Обновление сообщения {message_id} с подтверждением выбора формата")
+                edit_result = await self.edit_message(chat_id, message_id, "✅ Формат результата выбран")
+                logger.info(f"📝 Результат edit_message: {edit_result}")
+                
+                logger.info(f"📝 Отправка запроса текста пользователю {user_id}")
+                text_request_result = await self.send_text_request(chat_id, user_id)
+                logger.info(f"📤 Результат send_text_request: {text_request_result}")
                 
             elif data == "process_now":
                 # Обработка собранных сообщений
@@ -499,7 +543,14 @@ class SimpleTelegramBot:
                 await self.send_message(chat_id, "Используйте /start для возврата в главное меню или просто отправьте текст для быстрой суммаризации.")
                 
         except Exception as e:
-            logger.error(f"Ошибка обработки callback query: {e}")
+            logger.error(f"❌ CALLBACK ERROR: Критическая ошибка обработки callback query: {e}")
+            import traceback
+            logger.error(f"🔍 CALLBACK TRACEBACK: {traceback.format_exc()}")
+            # Пытаемся отправить ошибку пользователю
+            try:
+                await self.answer_callback_query(callback_query.get("id", ""), "Произошла ошибка при обработке")
+            except:
+                logger.error("❌ Не удалось отправить error callback response")
     
     async def handle_custom_summarize_text(self, update: dict, text: str):
         """Обработка текста в режиме настраиваемой суммаризации"""
@@ -910,8 +961,11 @@ class SimpleTelegramBot:
                     else:
                         await self.send_message(chat_id, "❌ Сообщение не содержит текста.\n\nПожалуйста, отправьте текстовое сообщение для суммаризации.")
             elif "callback_query" in update:
+                logger.info(f"🎯 MAIN HANDLER: Обнаружен callback_query в update")
+                logger.info(f"🎯 MAIN HANDLER: callback_query data: {update['callback_query'].get('data', 'NO_DATA')}")
                 # Обработка нажатий на inline-клавиатуру
                 await self.handle_callback_query(update["callback_query"])
+                logger.info(f"✅ MAIN HANDLER: Завершена обработка callback_query")
                 return
             else:
                 logger.warning(f"Неизвестный тип обновления: {update}")
@@ -1106,13 +1160,23 @@ class SimpleTelegramBot:
             data = {"callback_query_id": callback_query_id}
             if text:
                 data["text"] = text
+            
+            logger.info(f"📞 ANSWER_CALLBACK: Отправка answerCallbackQuery для {callback_query_id}")
+            logger.info(f"📞 ANSWER_CALLBACK: URL: {url}")
+            logger.info(f"📞 ANSWER_CALLBACK: Data: {json.dumps(data, ensure_ascii=False)}")
                 
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=data) as response:
+                    logger.info(f"📞 ANSWER_CALLBACK: HTTP status: {response.status}")
                     result = await response.json()
-                    return result.get("ok", False)
+                    logger.info(f"📞 ANSWER_CALLBACK: Response: {json.dumps(result, ensure_ascii=False)}")
+                    success = result.get("ok", False)
+                    logger.info(f"📞 ANSWER_CALLBACK: Success: {success}")
+                    return success
         except Exception as e:
-            logger.error(f"Ошибка подтверждения callback query: {e}")
+            logger.error(f"❌ ANSWER_CALLBACK ERROR: Ошибка подтверждения callback query: {e}")
+            import traceback
+            logger.error(f"🔍 ANSWER_CALLBACK TRACEBACK: {traceback.format_exc()}")
             return False
     
     async def edit_message(self, chat_id: int, message_id: int, text: str, reply_markup: dict = None):
@@ -1122,18 +1186,27 @@ class SimpleTelegramBot:
             data = {
                 "chat_id": chat_id,
                 "message_id": message_id,
-                "text": text,
-                "parse_mode": "Markdown"
+                "text": text
             }
             if reply_markup:
-                data["reply_markup"] = json.dumps(reply_markup)
+                data["reply_markup"] = reply_markup  # Убираем json.dumps, aiohttp сам сериализует
+            
+            logger.info(f"✏️ EDIT_MESSAGE: Редактирование сообщения {message_id} в чате {chat_id}")
+            logger.info(f"✏️ EDIT_MESSAGE: URL: {url}")
+            logger.info(f"✏️ EDIT_MESSAGE: Data: {json.dumps(data, ensure_ascii=False)}")
                 
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=data) as response:
+                    logger.info(f"✏️ EDIT_MESSAGE: HTTP status: {response.status}")
                     result = await response.json()
-                    return result.get("result")
+                    logger.info(f"✏️ EDIT_MESSAGE: Response: {json.dumps(result, ensure_ascii=False)}")
+                    success = result.get("ok", False)
+                    logger.info(f"✏️ EDIT_MESSAGE: Success: {success}")
+                    return result.get("result") if success else None
         except Exception as e:
-            logger.error(f"Ошибка редактирования сообщения: {e}")
+            logger.error(f"❌ EDIT_MESSAGE ERROR: Ошибка редактирования сообщения: {e}")
+            import traceback
+            logger.error(f"🔍 EDIT_MESSAGE TRACEBACK: {traceback.format_exc()}")
             return None
     
     async def delete_message(self, chat_id: int, message_id: int):
