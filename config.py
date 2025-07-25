@@ -20,8 +20,8 @@ class Config:
         # Groq API Key (основной для суммаризации)
         self.GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
         
-        # База данных
-        self.DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///bot_database.db')
+        # База данных - приоритет Railway PostgreSQL
+        self.DATABASE_URL = os.getenv('RAILWAY_DATABASE_URL') or os.getenv('DATABASE_URL', 'sqlite:///bot_database.db')
         
         # Настройки логирования
         self.LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
