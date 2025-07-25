@@ -1,0 +1,78 @@
+Fix the inline keyboard functionality in the Telegram bot code. The main issue is in the send_message method - it's not properly handling inline keyboards. Make these specific changes:
+
+1. **Fix the send_message method** - replace the current POST request logic with this:
+
+```python
+async def send_message(self, chat_id: int, text: str, parse_mode: Optional[str] = None, reply_markup: dict = None):
+    """Отправка сообщения с поддержкой inline-клавиатур"""
+    url = f"{self.base_url}/sendMessage"
+    data = {
+        "chat_id": chat_id,
+        "text": text[:4096]  # Telegram ограничивает длину сообщения
+    }
+    if parse_mode:
+        data["parse_mode"] = parse_mode
+    if reply_markup:
+        data["reply_markup"] = reply_markup  # Remove json.dumps() here
+    
+    logger.info(f"📤 SEND_MESSAGE: Отправка сообщения в чат {chat_id}")
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Use json=data when reply_markup is present, data=data otherwise
+            if reply_markup:
+                async with session.post(url, json=data) as response:
+                    result = await response.json()
+            else:
+                async with session.post(url, data=data) as response:
+                    result = await response.json()
+                    
+            if result.get("ok"):
+                logger.info(f"Сообщение успешно отправлено в чат {chat_id}")
+            else:
+                logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {result}")
+            return result
+    except Exception as e:
+        logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {e}")
+        return None
+1. Fix the edit_message method - update it similarly:
+async def edit_message(self, chat_id: int, message_id: int, text: str, reply_markup: dict = None):
+    """Редактирование существующего сообщения"""
+    try:
+        url = f"{self.base_url}/editMessageText"
+        data = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text
+        }
+        if reply_markup:
+            data["reply_markup"] = reply_markup  # Remove json.dumps() here
+        
+        async with aiohttp.ClientSession() as session:
+            # Use json=data when reply_markup is present, data=data otherwise
+            if reply_markup:
+                async with session.post(url, json=data) as response:
+                    result = await response.json()
+            else:
+                async with session.post(url, data=data) as response:
+                    result = await response.json()
+                    
+            return result.get("result") if result.get("ok") else None
+    except Exception as e:
+        logger.error(f"❌ EDIT_MESSAGE ERROR: Ошибка редактирования сообщения: {e}")
+        return None
+1. Remove test message from send_compression_level_menu method - delete these lines:
+# Remove this test message
+test_result = await self.send_message(chat_id, "⚠️ Тест: если видите это сообщение - проблема в клавиатуре выше")
+logger.info(f"🧪 COMPRESSION MENU: Тест сообщение отправлено: {test_result}")
+1. Ensure callback data is correct - verify the keyboard structure in send_compression_level_menu is exactly:
+keyboard = {
+    "inline_keyboard": [
+        [
+            {"text": "🔥 10%", "callback_data": "compression_10"},
+            {"text": "📝 30%", "callback_data": "compression_30"},
+            {"text": "📄 50%", "callback_data": "compression_50"}
+        ]
+    ]
+}
+Apply these changes and keep all other functionality intact. The inline buttons should work properly after these fixes.
