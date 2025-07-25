@@ -84,10 +84,12 @@ class SimpleTelegramBot:
     def update_user_compression_level(self, user_id: int, compression_level: int):
         """Обновление уровня сжатия пользователя в базе данных"""
         try:
+            logger.info(f"SimpleTelegramBot: начинаю обновление уровня сжатия для пользователя {user_id}: {compression_level}%")
             self.db.update_compression_level(user_id, compression_level)
-            logger.info(f"Уровень сжатия для пользователя {user_id} обновлен: {compression_level}%")
+            logger.info(f"SimpleTelegramBot: уровень сжатия для пользователя {user_id} успешно обновлен: {compression_level}%")
         except Exception as e:
-            logger.error(f"Ошибка обновления уровня сжатия для пользователя {user_id}: {e}")
+            logger.error(f"SimpleTelegramBot: ошибка обновления уровня сжатия для пользователя {user_id}: {e}")
+            raise
 
 
     

@@ -529,12 +529,14 @@ class DatabaseManager:
     def update_compression_level(self, user_id: int, compression_level: int):
         """Обновление уровня сжатия для пользователя"""
         try:
+            logger.info(f"Начинаю обновление уровня сжатия для пользователя {user_id}: {compression_level}%")
             # Конвертируем уровень сжатия в ratio
             summary_ratio = compression_level / 100.0
             self.update_user_settings(user_id, summary_ratio=summary_ratio, compression_level=compression_level)
-            logger.info(f"Обновлен уровень сжатия для пользователя {user_id}: {compression_level}%")
+            logger.info(f"Уровень сжатия успешно обновлен для пользователя {user_id}: {compression_level}%")
         except Exception as e:
             logger.error(f"Ошибка обновления уровня сжатия для пользователя {user_id}: {e}")
+            raise
 
     def close_connections(self):
         """Закрытие всех подключений к БД"""
