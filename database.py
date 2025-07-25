@@ -15,9 +15,10 @@ logger = logging.getLogger(__name__)
 class DatabaseManager:
     """Менеджер базы данных для Telegram бота (PostgreSQL/SQLite)"""
     
-    def __init__(self, database_url: str):
-        self.database_url = database_url
-        self.is_postgres = database_url.startswith('postgresql://') or database_url.startswith('postgres://')
+    def __init__(self, database_url: str = None):
+        # Приоритет Railway PostgreSQL
+        self.database_url = database_url or os.getenv('RAILWAY_DATABASE_URL') or os.getenv('DATABASE_URL', 'sqlite:///bot_database.db')
+        self.is_postgres = self.database_url.startswith('postgresql://') or self.database_url.startswith('postgres://')
         
         if self.is_postgres:
             import psycopg2
@@ -150,10 +151,28 @@ class DatabaseManager:
                         )
                     """)
                 
+                # Создаем таблицу для логирования изменений пользователей (только для PostgreSQL)
+                if self.is_postgres:
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS user_changes_log (
+                            id SERIAL PRIMARY KEY,
+                            user_id BIGINT NOT NULL,
+                            username TEXT,
+                            change_type TEXT NOT NULL,
+                            old_value TEXT,
+                            new_value TEXT,
+                            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
+                
                 # Индексы для оптимизации
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_requests_user_id ON user_requests(user_id)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_requests_timestamp ON user_requests(timestamp)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_system_stats_date ON system_stats(stat_date)")
+                
+                if self.is_postgres:
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_changes_log_user_id ON user_changes_log(user_id)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_changes_log_timestamp ON user_changes_log(timestamp)")
                 
                 logger.info("База данных инициализирована успешно")
                 
@@ -526,14 +545,44 @@ class DatabaseManager:
             logger.error(f"Ошибка создания резервной копии: {e}")
             return False
     
-    def update_compression_level(self, user_id: int, compression_level: int):
-        """Обновление уровня сжатия для пользователя"""
+    def log_user_change(self, user_id: int, username: str, change_type: str, old_value: str, new_value: str):
+        """Логирование изменений пользователя (только для PostgreSQL)"""
+        if not self.is_postgres:
+            return
+            
         try:
-            logger.info(f"Начинаю обновление уровня сжатия для пользователя {user_id}: {compression_level}%")
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO user_changes_log 
+                    (user_id, username, change_type, old_value, new_value, timestamp)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (user_id, username, change_type, old_value, new_value, datetime.now()))
+                
+                logger.info(f"Записано изменение для пользователя {user_id}: {change_type} {old_value} -> {new_value}")
+                
+        except Exception as e:
+            logger.error(f"Ошибка записи изменения пользователя {user_id}: {e}")
+
+    def update_compression_level(self, user_id: int, compression_level: int, username: str = None):
+        """Обновление уровня сжатия для пользователя с логированием"""
+        try:
+            # Получаем старое значение для логирования
+            old_settings = self.get_user_settings(user_id)
+            old_compression = old_settings.get('compression_level', 30)
+            
+            logger.info(f"Начинаю обновление уровня сжатия для пользователя {user_id}: {old_compression}% -> {compression_level}%")
+            
             # Конвертируем уровень сжатия в ratio
             summary_ratio = compression_level / 100.0
             self.update_user_settings(user_id, summary_ratio=summary_ratio, compression_level=compression_level)
+            
+            # Логируем изменение в Railway PostgreSQL
+            if username and old_compression != compression_level:
+                self.log_user_change(user_id, username, 'compression_level', str(old_compression), str(compression_level))
+            
             logger.info(f"Уровень сжатия успешно обновлен для пользователя {user_id}: {compression_level}%")
+            
         except Exception as e:
             logger.error(f"Ошибка обновления уровня сжатия для пользователя {user_id}: {e}")
             raise

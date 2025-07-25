@@ -81,11 +81,11 @@ class SimpleTelegramBot:
             logger.error(f"Ошибка получения настроек пользователя {user_id}: {e}")
             return 30
 
-    def update_user_compression_level(self, user_id: int, compression_level: int):
+    def update_user_compression_level(self, user_id: int, compression_level: int, username: str = None):
         """Обновление уровня сжатия пользователя в базе данных"""
         try:
             logger.info(f"SimpleTelegramBot: начинаю обновление уровня сжатия для пользователя {user_id}: {compression_level}%")
-            self.db.update_compression_level(user_id, compression_level)
+            self.db.update_compression_level(user_id, compression_level, username)
             logger.info(f"SimpleTelegramBot: уровень сжатия для пользователя {user_id} успешно обновлен: {compression_level}%")
         except Exception as e:
             logger.error(f"SimpleTelegramBot: ошибка обновления уровня сжатия для пользователя {user_id}: {e}")
@@ -309,8 +309,11 @@ class SimpleTelegramBot:
         user_id = update["message"]["from"]["id"]
         
         try:
+            # Получаем username пользователя для логирования
+            username = update["message"]["from"].get("username", "")
+            
             # Сохраняем новый уровень сжатия в базе данных
-            self.update_user_compression_level(user_id, compression_level)
+            self.update_user_compression_level(user_id, compression_level, username)
             
             compression_text = f"{compression_level}%"
             confirmation_text = f"""✅ Уровень сжатия обновлен: {compression_text}
