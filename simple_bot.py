@@ -65,107 +65,31 @@ class SimpleTelegramBot:
         self.user_messages_buffer: Dict[int, list] = {}
         
         # Инициализация базы данных
-        self.init_database()
+        from database import DatabaseManager
+        database_url = os.getenv('DATABASE_URL', 'sqlite:///bot_database.db')
+        self.db = DatabaseManager(database_url)
+        self.db.init_database()
         
         logger.info("Simple Telegram Bot инициализирован")
     
-    def init_database(self):
-        """Инициализация базы данных"""
+    def get_user_compression_level(self, user_id: int) -> int:
+        """Получение уровня сжатия пользователя из базы данных"""
         try:
-            conn = sqlite3.connect('bot_database.db')
-            cursor = conn.cursor()
-            
-            # Таблица запросов пользователей
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS user_requests (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    username TEXT,
-                    original_text_length INTEGER NOT NULL,
-                    summary_length INTEGER NOT NULL,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            # Таблица настроек пользователей
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS user_settings (
-                    user_id INTEGER PRIMARY KEY,
-                    summary_ratio REAL DEFAULT 0.3,
-                    language_preference TEXT DEFAULT 'auto'
-                )
-            """)
-            
-            conn.commit()
-            conn.close()
-            logger.info("База данных инициализирована")
+            settings = self.db.get_user_settings(user_id)
+            return settings.get('compression_level', 30)  # По умолчанию 30%
         except Exception as e:
-            logger.error(f"Ошибка инициализации базы данных: {e}")
-    
-    def save_user_request(self, user_id: int, username: str, original_length: int, summary_length: int):
-        """Сохранение запроса пользователя"""
+            logger.error(f"Ошибка получения настроек пользователя {user_id}: {e}")
+            return 30
+
+    def update_user_compression_level(self, user_id: int, compression_level: int):
+        """Обновление уровня сжатия пользователя в базе данных"""
         try:
-            conn = sqlite3.connect('bot_database.db')
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                INSERT INTO user_requests (user_id, username, original_text_length, summary_length)
-                VALUES (?, ?, ?, ?)
-            """, (user_id, username, original_length, summary_length))
-            
-            # Создаем настройки пользователя если их нет
-            cursor.execute("""
-                INSERT OR IGNORE INTO user_settings (user_id, summary_ratio, language_preference)
-                VALUES (?, 0.3, 'auto')
-            """, (user_id,))
-            
-            conn.commit()
-            conn.close()
+            self.db.update_compression_level(user_id, compression_level)
+            logger.info(f"Уровень сжатия для пользователя {user_id} обновлен: {compression_level}%")
         except Exception as e:
-            logger.error(f"Ошибка сохранения запроса: {e}")
-    
-    def get_user_stats(self, user_id: int) -> Dict:
-        """Получение статистики пользователя"""
-        try:
-            conn = sqlite3.connect('bot_database.db')
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                SELECT 
-                    COUNT(*) as total_requests,
-                    SUM(original_text_length) as total_chars,
-                    SUM(summary_length) as total_summary_chars,
-                    MIN(timestamp) as first_request
-                FROM user_requests 
-                WHERE user_id = ?
-            """, (user_id,))
-            
-            row = cursor.fetchone()
-            conn.close()
-            
-            if row and row[0] > 0:
-                total_chars = row[1] or 0
-                total_summary_chars = row[2] or 0
-                avg_compression = (total_summary_chars / total_chars) if total_chars > 0 else 0
-                
-                return {
-                    'total_requests': row[0],
-                    'total_chars': total_chars,
-                    'total_summary_chars': total_summary_chars,
-                    'avg_compression': avg_compression,
-                    'first_request': row[3]
-                }
-            else:
-                return {
-                    'total_requests': 0,
-                    'total_chars': 0,
-                    'total_summary_chars': 0,
-                    'avg_compression': 0,
-                    'first_request': None
-                }
-        except Exception as e:
-            logger.error(f"Ошибка получения статистики: {e}")
-            return {'total_requests': 0, 'total_chars': 0, 'total_summary_chars': 0, 'avg_compression': 0, 'first_request': None}
+            logger.error(f"Ошибка обновления уровня сжатия для пользователя {user_id}: {e}")
+
+
     
     async def send_message(self, chat_id: int, text: str, parse_mode: Optional[str] = None, reply_markup: dict = None):
         """Отправка сообщения с поддержкой inline-клавиатур"""
@@ -353,7 +277,17 @@ class SimpleTelegramBot:
         chat_id = update["message"]["chat"]["id"]
         user_id = update["message"]["from"]["id"]
         
-        user_stats = self.get_user_stats(user_id)
+        try:
+            user_stats = self.db.get_user_stats(user_id)
+        except Exception as e:
+            logger.error(f"Ошибка получения статистики пользователя {user_id}: {e}")
+            user_stats = {
+                'total_requests': 0,
+                'total_chars': 0,
+                'total_summary_chars': 0,
+                'avg_compression': 0,
+                'first_request': None
+            }
         
         stats_text = f"""📊 Ваша статистика:
 
@@ -366,6 +300,34 @@ class SimpleTelegramBot:
 📈 Используйте бота для обработки длинных текстов и статей!"""
         
         await self.send_message(chat_id, stats_text)
+
+    async def handle_compression_command(self, update: dict, compression_level: int):
+        """Обработка команд уровня сжатия (/10, /30, /50 или 10%, 30%, 50%)"""
+        chat_id = update["message"]["chat"]["id"]
+        user_id = update["message"]["from"]["id"]
+        
+        try:
+            # Сохраняем новый уровень сжатия в базе данных
+            self.update_user_compression_level(user_id, compression_level)
+            
+            compression_text = f"{compression_level}%"
+            confirmation_text = f"""✅ Уровень сжатия обновлен: {compression_text}
+
+Теперь все ваши тексты будут суммаризированы с уровнем сжатия {compression_text}.
+
+📝 Отправьте текст для суммаризации или используйте другие команды:
+• /10 → максимальное сжатие (10%)
+• /30 → сбалансированное сжатие (30%)  
+• /50 → умеренное сжатие (50%)
+• /help → справка
+• /stats → статистика"""
+            
+            await self.send_message(chat_id, confirmation_text)
+            logger.info(f"Пользователь {user_id} изменил уровень сжатия на {compression_level}%")
+            
+        except Exception as e:
+            logger.error(f"Ошибка обработки команды сжатия {compression_level}% для пользователя {user_id}: {e}")
+            await self.send_message(chat_id, "❌ Произошла ошибка при изменении настроек. Попробуйте еще раз.")
     
 
     
@@ -494,7 +456,11 @@ class SimpleTelegramBot:
             await self.send_message(chat_id, response_text)
             
             # Сохраняем статистику
-            self.save_user_request(user_id, total_chars, len(summary))
+            try:
+                username = update["message"]["from"].get("username", "")
+                self.db.save_user_request(user_id, username, total_chars, len(summary), 0.0, 'groq')
+            except Exception as save_error:
+                logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
             
             # Очищаем состояние пользователя
             if user_id in self.user_states:
@@ -652,20 +618,27 @@ class SimpleTelegramBot:
             
             start_time = time.time()
             
-            # Выполняем суммаризацию
-            summary = await self.summarize_text(text, target_ratio=0.3)
+            # Получаем уровень сжатия пользователя из базы данных
+            user_compression_level = self.get_user_compression_level(user_id)
+            target_ratio = user_compression_level / 100.0
+            
+            # Выполняем суммаризацию с пользовательскими настройками
+            summary = await self.summarize_text(text, target_ratio=target_ratio)
             
             processing_time = time.time() - start_time
             
             if summary and not summary.startswith("❌"):
                 # Сохраняем запрос в базу данных
-                self.save_user_request(user_id, username, len(text), len(summary))
+                try:
+                    self.db.save_user_request(user_id, username, len(text), len(summary), processing_time, 'groq')
+                except Exception as save_error:
+                    logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
                 
                 # Вычисляем статистику
                 compression_ratio = len(summary) / len(text)
                 
                 # Формируем ответ
-                response_text = f"""📋 Саммари готово!
+                response_text = f"""📋 Саммари готово! (Уровень сжатия: {user_compression_level}%)
 
 {summary}
 
@@ -787,12 +760,12 @@ class SimpleTelegramBot:
                         elif text == "/stats":
                             await self.handle_stats_command(update)
 
-                        elif text in ["/10", "/10%"]:
-                            await self.handle_direct_compression_command(update, "10")
-                        elif text in ["/30", "/30%"]:
-                            await self.handle_direct_compression_command(update, "30")
-                        elif text in ["/50", "/50%"]:
-                            await self.handle_direct_compression_command(update, "50")
+                        elif text in ["/10"]:
+                            await self.handle_compression_command(update, 10)
+                        elif text in ["/30"]:
+                            await self.handle_compression_command(update, 30)
+                        elif text in ["/50"]:
+                            await self.handle_compression_command(update, 50)
                         else:
                             logger.warning(f"Неизвестная команда: {text}")
                             await self.send_message(
@@ -800,8 +773,11 @@ class SimpleTelegramBot:
                                 "❓ Неизвестная команда. Используйте /help для получения справки."
                             )
                     else:
-                        # Проверяем текстовые команды для настраиваемой суммаризации
-                        if user_id in self.user_states:
+                        # Проверяем текстовые команды уровня сжатия
+                        if text.strip() in ["10%", "30%", "50%"]:
+                            compression_level = int(text.strip().replace('%', ''))
+                            await self.handle_compression_command(update, compression_level)
+                        elif user_id in self.user_states:
                             current_step = self.user_states[user_id].get("step")
                             
                             # Обработка выбора уровня сжатия текстом

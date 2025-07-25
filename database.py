@@ -1,9 +1,9 @@
 """
-Модуль для работы с базой данных SQLite
+Модуль для работы с базой данных PostgreSQL/SQLite
 Хранение пользовательских запросов, настроек и статистики
 """
 
-import sqlite3
+import os
 import logging
 from datetime import datetime
 from typing import Dict, Optional, List
@@ -13,27 +13,45 @@ from contextlib import contextmanager
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-    """Менеджер базы данных для Telegram бота"""
+    """Менеджер базы данных для Telegram бота (PostgreSQL/SQLite)"""
     
     def __init__(self, database_url: str):
-        if database_url.startswith('sqlite:///'):
-            self.db_path = database_url[10:]  # Убираем 'sqlite:///'
+        self.database_url = database_url
+        self.is_postgres = database_url.startswith('postgresql://') or database_url.startswith('postgres://')
+        
+        if self.is_postgres:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            self.psycopg2 = psycopg2
+            self.RealDictCursor = RealDictCursor
+            logger.info(f"Используется PostgreSQL: {database_url[:20]}...")
         else:
-            self.db_path = database_url
+            import sqlite3
+            self.sqlite3 = sqlite3
+            if database_url.startswith('sqlite:///'):
+                self.db_path = database_url[10:]  # Убираем 'sqlite:///'
+            else:
+                self.db_path = database_url
+            logger.info(f"Используется SQLite: {self.db_path}")
         
         self._local = threading.local()
-        logger.info(f"Инициализирован DatabaseManager с БД: {self.db_path}")
     
     @contextmanager
     def get_connection(self):
         """Контекстный менеджер для получения подключения к БД"""
         if not hasattr(self._local, 'connection'):
-            self._local.connection = sqlite3.connect(
-                self.db_path, 
-                check_same_thread=False,
-                timeout=30.0
-            )
-            self._local.connection.row_factory = sqlite3.Row
+            if self.is_postgres:
+                self._local.connection = self.psycopg2.connect(
+                    self.database_url,
+                    cursor_factory=self.RealDictCursor
+                )
+            else:
+                self._local.connection = self.sqlite3.connect(
+                    self.db_path, 
+                    check_same_thread=False,
+                    timeout=30.0
+                )
+                self._local.connection.row_factory = self.sqlite3.Row
         
         try:
             yield self._local.connection
@@ -51,44 +69,86 @@ class DatabaseManager:
                 cursor = conn.cursor()
                 
                 # Таблица запросов пользователей
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS user_requests (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id INTEGER NOT NULL,
-                        username TEXT,
-                        original_text_length INTEGER NOT NULL,
-                        summary_length INTEGER NOT NULL,
-                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        processing_time REAL DEFAULT 0.0,
-                        method_used TEXT DEFAULT 'unknown'
-                    )
-                """)
+                if self.is_postgres:
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS user_requests (
+                            id SERIAL PRIMARY KEY,
+                            user_id BIGINT NOT NULL,
+                            username TEXT,
+                            original_text_length INTEGER NOT NULL,
+                            summary_length INTEGER NOT NULL,
+                            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            processing_time REAL DEFAULT 0.0,
+                            method_used TEXT DEFAULT 'unknown'
+                        )
+                    """)
+                else:
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS user_requests (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id INTEGER NOT NULL,
+                            username TEXT,
+                            original_text_length INTEGER NOT NULL,
+                            summary_length INTEGER NOT NULL,
+                            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            processing_time REAL DEFAULT 0.0,
+                            method_used TEXT DEFAULT 'unknown'
+                        )
+                    """)
                 
                 # Таблица настроек пользователей
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS user_settings (
-                        user_id INTEGER PRIMARY KEY,
-                        summary_ratio REAL DEFAULT 0.3,
-                        language_preference TEXT DEFAULT 'auto',
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
+                if self.is_postgres:
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS user_settings (
+                            user_id BIGINT PRIMARY KEY,
+                            summary_ratio REAL DEFAULT 0.3,
+                            compression_level INTEGER DEFAULT 30,
+                            language_preference TEXT DEFAULT 'auto',
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
+                else:
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS user_settings (
+                            user_id INTEGER PRIMARY KEY,
+                            summary_ratio REAL DEFAULT 0.3,
+                            compression_level INTEGER DEFAULT 30,
+                            language_preference TEXT DEFAULT 'auto',
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
                 
                 # Таблица статистики системы
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS system_stats (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        stat_date DATE DEFAULT CURRENT_DATE,
-                        total_requests INTEGER DEFAULT 0,
-                        total_users INTEGER DEFAULT 0,
-                        total_chars_processed INTEGER DEFAULT 0,
-                        avg_processing_time REAL DEFAULT 0.0,
-                        groq_requests INTEGER DEFAULT 0,
-                        local_requests INTEGER DEFAULT 0,
-                        failed_requests INTEGER DEFAULT 0
-                    )
-                """)
+                if self.is_postgres:
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS system_stats (
+                            id SERIAL PRIMARY KEY,
+                            stat_date DATE DEFAULT CURRENT_DATE,
+                            total_requests INTEGER DEFAULT 0,
+                            total_users INTEGER DEFAULT 0,
+                            total_chars_processed INTEGER DEFAULT 0,
+                            avg_processing_time REAL DEFAULT 0.0,
+                            groq_requests INTEGER DEFAULT 0,
+                            local_requests INTEGER DEFAULT 0,
+                            failed_requests INTEGER DEFAULT 0
+                        )
+                    """)
+                else:
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS system_stats (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            stat_date DATE DEFAULT CURRENT_DATE,
+                            total_requests INTEGER DEFAULT 0,
+                            total_users INTEGER DEFAULT 0,
+                            total_chars_processed INTEGER DEFAULT 0,
+                            avg_processing_time REAL DEFAULT 0.0,
+                            groq_requests INTEGER DEFAULT 0,
+                            local_requests INTEGER DEFAULT 0,
+                            failed_requests INTEGER DEFAULT 0
+                        )
+                    """)
                 
                 # Индексы для оптимизации
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_requests_user_id ON user_requests(user_id)")
@@ -109,13 +169,22 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                cursor.execute("""
-                    INSERT INTO user_requests 
-                    (user_id, username, original_text_length, summary_length, 
-                     processing_time, method_used, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (user_id, username, original_length, summary_length, 
-                      processing_time, method_used, datetime.now()))
+                if self.is_postgres:
+                    cursor.execute("""
+                        INSERT INTO user_requests 
+                        (user_id, username, original_text_length, summary_length, 
+                         processing_time, method_used, timestamp)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (user_id, username, original_length, summary_length, 
+                          processing_time, method_used, datetime.now()))
+                else:
+                    cursor.execute("""
+                        INSERT INTO user_requests 
+                        (user_id, username, original_text_length, summary_length, 
+                         processing_time, method_used, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (user_id, username, original_length, summary_length, 
+                          processing_time, method_used, datetime.now()))
                 
                 logger.debug(f"Сохранен запрос пользователя {user_id}: {original_length} -> {summary_length} символов")
                 
@@ -125,14 +194,23 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Ошибка сохранения запроса пользователя {user_id}: {e}")
     
-    def _ensure_user_settings(self, user_id: int, cursor: sqlite3.Cursor):
+    def _ensure_user_settings(self, user_id: int, cursor):
         """Убеждаемся, что у пользователя есть настройки"""
-        cursor.execute("SELECT 1 FROM user_settings WHERE user_id = ?", (user_id,))
+        if self.is_postgres:
+            cursor.execute("SELECT 1 FROM user_settings WHERE user_id = %s", (user_id,))
+        else:
+            cursor.execute("SELECT 1 FROM user_settings WHERE user_id = ?", (user_id,))
         if not cursor.fetchone():
-            cursor.execute("""
-                INSERT INTO user_settings (user_id, summary_ratio, language_preference)
-                VALUES (?, 0.3, 'auto')
-            """, (user_id,))
+            if self.is_postgres:
+                cursor.execute("""
+                    INSERT INTO user_settings (user_id, summary_ratio, compression_level, language_preference)
+                    VALUES (%s, 0.3, 30, 'auto')
+                """, (user_id,))
+            else:
+                cursor.execute("""
+                    INSERT INTO user_settings (user_id, summary_ratio, compression_level, language_preference)
+                    VALUES (?, 0.3, 30, 'auto')
+                """, (user_id,))
     
     def get_user_settings(self, user_id: int) -> Dict:
         """Получение настроек пользователя"""
@@ -140,15 +218,22 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                cursor.execute("""
-                    SELECT summary_ratio, language_preference, created_at, updated_at
-                    FROM user_settings WHERE user_id = ?
-                """, (user_id,))
+                if self.is_postgres:
+                    cursor.execute("""
+                        SELECT summary_ratio, compression_level, language_preference, created_at, updated_at
+                        FROM user_settings WHERE user_id = %s
+                    """, (user_id,))
+                else:
+                    cursor.execute("""
+                        SELECT summary_ratio, compression_level, language_preference, created_at, updated_at
+                        FROM user_settings WHERE user_id = ?
+                    """, (user_id,))
                 
                 row = cursor.fetchone()
                 if row:
                     return {
                         'summary_ratio': row['summary_ratio'],
+                        'compression_level': row['compression_level'],
                         'language_preference': row['language_preference'],
                         'created_at': row['created_at'],
                         'updated_at': row['updated_at']
@@ -158,6 +243,7 @@ class DatabaseManager:
                     self._ensure_user_settings(user_id, cursor)
                     return {
                         'summary_ratio': 0.3,
+                        'compression_level': 30,
                         'language_preference': 'auto',
                         'created_at': datetime.now().isoformat(),
                         'updated_at': datetime.now().isoformat()
@@ -167,13 +253,14 @@ class DatabaseManager:
             logger.error(f"Ошибка получения настроек пользователя {user_id}: {e}")
             return {
                 'summary_ratio': 0.3,
+                'compression_level': 30,
                 'language_preference': 'auto',
                 'created_at': datetime.now().isoformat(),
                 'updated_at': datetime.now().isoformat()
             }
     
     def update_user_settings(self, user_id: int, summary_ratio: float = None, 
-                           language_preference: str = None):
+                           compression_level: int = None, language_preference: str = None):
         """Обновление настроек пользователя"""
         try:
             with self.get_connection() as conn:
@@ -186,23 +273,47 @@ class DatabaseManager:
                 params = []
                 
                 if summary_ratio is not None:
-                    update_fields.append("summary_ratio = ?")
+                    if self.is_postgres:
+                        update_fields.append("summary_ratio = %s")
+                    else:
+                        update_fields.append("summary_ratio = ?")
                     params.append(summary_ratio)
                 
+                if compression_level is not None:
+                    if self.is_postgres:
+                        update_fields.append("compression_level = %s")
+                    else:
+                        update_fields.append("compression_level = ?")
+                    params.append(compression_level)
+                
                 if language_preference is not None:
-                    update_fields.append("language_preference = ?")
+                    if self.is_postgres:
+                        update_fields.append("language_preference = %s")
+                    else:
+                        update_fields.append("language_preference = ?")
                     params.append(language_preference)
                 
                 if update_fields:
-                    update_fields.append("updated_at = ?")
-                    params.append(datetime.now())
-                    params.append(user_id)
-                    
-                    query = f"""
-                        UPDATE user_settings 
-                        SET {', '.join(update_fields)}
-                        WHERE user_id = ?
-                    """
+                    if self.is_postgres:
+                        update_fields.append("updated_at = %s")
+                        params.append(datetime.now())
+                        params.append(user_id)
+                        
+                        query = f"""
+                            UPDATE user_settings 
+                            SET {', '.join(update_fields)}
+                            WHERE user_id = %s
+                        """
+                    else:
+                        update_fields.append("updated_at = ?")
+                        params.append(datetime.now())
+                        params.append(user_id)
+                        
+                        query = f"""
+                            UPDATE user_settings 
+                            SET {', '.join(update_fields)}
+                            WHERE user_id = ?
+                        """
                     
                     cursor.execute(query, params)
                     logger.info(f"Обновлены настройки пользователя {user_id}")
@@ -216,17 +327,30 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                cursor.execute("""
-                    SELECT 
-                        COUNT(*) as total_requests,
-                        SUM(original_text_length) as total_chars,
-                        SUM(summary_length) as total_summary_chars,
-                        AVG(processing_time) as avg_processing_time,
-                        MIN(timestamp) as first_request,
-                        MAX(timestamp) as last_request
-                    FROM user_requests 
-                    WHERE user_id = ?
-                """, (user_id,))
+                if self.is_postgres:
+                    cursor.execute("""
+                        SELECT 
+                            COUNT(*) as total_requests,
+                            SUM(original_text_length) as total_chars,
+                            SUM(summary_length) as total_summary_chars,
+                            AVG(processing_time) as avg_processing_time,
+                            MIN(timestamp) as first_request,
+                            MAX(timestamp) as last_request
+                        FROM user_requests 
+                        WHERE user_id = %s
+                    """, (user_id,))
+                else:
+                    cursor.execute("""
+                        SELECT 
+                            COUNT(*) as total_requests,
+                            SUM(original_text_length) as total_chars,
+                            SUM(summary_length) as total_summary_chars,
+                            AVG(processing_time) as avg_processing_time,
+                            MIN(timestamp) as first_request,
+                            MAX(timestamp) as last_request
+                        FROM user_requests 
+                        WHERE user_id = ?
+                    """, (user_id,))
                 
                 row = cursor.fetchone()
                 if row and row['total_requests'] > 0:
@@ -322,10 +446,16 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                cursor.execute("""
-                    DELETE FROM user_requests 
-                    WHERE timestamp < datetime('now', '-{} days')
-                """.format(days_to_keep))
+                if self.is_postgres:
+                    cursor.execute("""
+                        DELETE FROM user_requests 
+                        WHERE timestamp < CURRENT_TIMESTAMP - INTERVAL '%s days'
+                    """, (days_to_keep,))
+                else:
+                    cursor.execute("""
+                        DELETE FROM user_requests 
+                        WHERE timestamp < datetime('now', '-{} days')
+                    """.format(days_to_keep))
                 
                 deleted_count = cursor.rowcount
                 logger.info(f"Удалено {deleted_count} старых записей (старше {days_to_keep} дней)")
@@ -342,19 +472,34 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                cursor.execute("""
-                    SELECT 
-                        user_id,
-                        username,
-                        COUNT(*) as requests_count,
-                        SUM(original_text_length) as total_chars_processed,
-                        AVG(processing_time) as avg_processing_time,
-                        MAX(timestamp) as last_activity
-                    FROM user_requests
-                    GROUP BY user_id, username
-                    ORDER BY requests_count DESC
-                    LIMIT ?
-                """, (limit,))
+                if self.is_postgres:
+                    cursor.execute("""
+                        SELECT 
+                            user_id,
+                            username,
+                            COUNT(*) as requests_count,
+                            SUM(original_text_length) as total_chars_processed,
+                            AVG(processing_time) as avg_processing_time,
+                            MAX(timestamp) as last_activity
+                        FROM user_requests
+                        GROUP BY user_id, username
+                        ORDER BY requests_count DESC
+                        LIMIT %s
+                    """, (limit,))
+                else:
+                    cursor.execute("""
+                        SELECT 
+                            user_id,
+                            username,
+                            COUNT(*) as requests_count,
+                            SUM(original_text_length) as total_chars_processed,
+                            AVG(processing_time) as avg_processing_time,
+                            MAX(timestamp) as last_activity
+                        FROM user_requests
+                        GROUP BY user_id, username
+                        ORDER BY requests_count DESC
+                        LIMIT ?
+                    """, (limit,))
                 
                 return [dict(row) for row in cursor.fetchall()]
                 
@@ -365,18 +510,32 @@ class DatabaseManager:
     def backup_database(self, backup_path: str):
         """Создание резервной копии базы данных"""
         try:
-            with self.get_connection() as conn:
-                backup_conn = sqlite3.connect(backup_path)
-                conn.backup(backup_conn)
-                backup_conn.close()
-                
-                logger.info(f"Резервная копия создана: {backup_path}")
-                return True
+            if not self.is_postgres:
+                with self.get_connection() as conn:
+                    backup_conn = self.sqlite3.connect(backup_path)
+                    conn.backup(backup_conn)
+                    backup_conn.close()
+                    
+                    logger.info(f"Резервная копия создана: {backup_path}")
+                    return True
+            else:
+                logger.warning("Резервные копии PostgreSQL не поддерживаются этим методом")
+                return False
                 
         except Exception as e:
             logger.error(f"Ошибка создания резервной копии: {e}")
             return False
     
+    def update_compression_level(self, user_id: int, compression_level: int):
+        """Обновление уровня сжатия для пользователя"""
+        try:
+            # Конвертируем уровень сжатия в ratio
+            summary_ratio = compression_level / 100.0
+            self.update_user_settings(user_id, summary_ratio=summary_ratio, compression_level=compression_level)
+            logger.info(f"Обновлен уровень сжатия для пользователя {user_id}: {compression_level}%")
+        except Exception as e:
+            logger.error(f"Ошибка обновления уровня сжатия для пользователя {user_id}: {e}")
+
     def close_connections(self):
         """Закрытие всех подключений к БД"""
         if hasattr(self._local, 'connection'):
