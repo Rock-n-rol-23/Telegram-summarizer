@@ -177,11 +177,14 @@ class SimpleTelegramBot:
         if parse_mode:
             data["parse_mode"] = parse_mode
         if reply_markup:
-            data["reply_markup"] = reply_markup  # Убираем json.dumps, aiohttp сам сериализует
+            data["reply_markup"] = json.dumps(reply_markup)  # Возвращаем json.dumps для Telegram API
+        
+        logger.info(f"📤 SEND_MESSAGE: Отправка сообщения в чат {chat_id}")
+        logger.info(f"📤 SEND_MESSAGE: Data: {json.dumps(data, ensure_ascii=False, default=str)}")
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=data) as response:
+                async with session.post(url, data=data) as response:  # Используем data= вместо json=
                     result = await response.json()
                     if result.get("ok"):
                         logger.info(f"Сообщение успешно отправлено в чат {chat_id}")
@@ -379,6 +382,15 @@ class SimpleTelegramBot:
         logger.info(f"📋 SUMMARIZE COMMAND: Отправка меню выбора уровня сжатия в чат {chat_id}")
         menu_result = await self.send_compression_level_menu(chat_id)
         logger.info(f"📤 SUMMARIZE COMMAND: Результат отправки меню: {menu_result}")
+        
+        # Добавляем резервные инструкции
+        backup_text = """💡 Если кнопки не работают, отправьте текстом:
+• "10%" - для максимального сжатия
+• "30%" - для сбалансированного сжатия  
+• "50%" - для умеренного сжатия"""
+        
+        backup_result = await self.send_message(chat_id, backup_text)
+        logger.info(f"🔄 SUMMARIZE COMMAND: Резервные инструкции отправлены: {backup_result}")
     
     async def send_compression_level_menu(self, chat_id: int):
         """Отправка меню выбора уровня сжатия"""
@@ -407,6 +419,11 @@ class SimpleTelegramBot:
         
         result = await self.send_message(chat_id, text, reply_markup=keyboard)
         logger.info(f"📤 COMPRESSION MENU: Результат отправки: {result}")
+        
+        # Добавляем тестовое сообщение для проверки
+        test_result = await self.send_message(chat_id, "⚠️ Тест: если видите это сообщение - проблема в клавиатуре выше")
+        logger.info(f"🧪 COMPRESSION MENU: Тест сообщение отправлено: {test_result}")
+        
         return result
     
     async def send_format_menu(self, chat_id: int):
@@ -725,6 +742,21 @@ class SimpleTelegramBot:
         user_id = user["id"]
         username = user.get("username", "")
         
+        # Проверяем резервные команды для настраиваемой суммаризации
+        if message_text and user_id in self.user_states and self.user_states[user_id].get("step") == "compression_level":
+            if message_text.strip() in ["10%", "30%", "50%"]:
+                logger.info(f"🔄 BACKUP COMMAND: Пользователь {user_id} выбрал уровень сжатия текстом: {message_text.strip()}")
+                # Имитируем callback для обработки
+                import time
+                fake_callback = {
+                    "id": f"manual_{int(time.time() * 1000)}",
+                    "from": {"id": user_id},
+                    "message": {"chat": {"id": chat_id}, "message_id": 1},
+                    "data": f"compression_{message_text.strip().replace('%', '')}"
+                }
+                await self.handle_callback_query(fake_callback)
+                return
+        
         # Используем переданный текст или извлекаем из сообщения
         if message_text:
             text = message_text
@@ -986,13 +1018,30 @@ class SimpleTelegramBot:
         if offset:
             params["offset"] = offset
         
+        logger.info(f"🔄 GET_UPDATES: Запрос обновлений с offset={offset}, timeout={timeout}")
+        logger.info(f"🔄 GET_UPDATES: Allowed updates: {params['allowed_updates']}")
+        
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params) as response:
                     result = await response.json()
+                    
+                    # Проверяем наличие callback_query в полученных обновлениях
+                    if result and result.get("ok"):
+                        update_list = result.get("result", [])
+                        logger.info(f"🔄 GET_UPDATES: Получено {len(update_list)} обновлений")
+                        for update in update_list:
+                            if "callback_query" in update:
+                                logger.info(f"🎯 GET_UPDATES: ПОЛУЧЕН CALLBACK_QUERY: {json.dumps(update['callback_query'], ensure_ascii=False)}")
+                            elif "message" in update:
+                                msg = update["message"]
+                                logger.info(f"📨 GET_UPDATES: Получено сообщение от {msg.get('from', {}).get('id', 'unknown')}: {msg.get('text', msg.get('caption', 'no_text'))[:50]}")
+                    
                     return result
         except Exception as e:
-            logger.error(f"Ошибка получения обновлений: {e}")
+            logger.error(f"❌ GET_UPDATES ERROR: Ошибка получения обновлений: {e}")
+            import traceback
+            logger.error(f"🔍 GET_UPDATES TRACEBACK: {traceback.format_exc()}")
             return None
     
     async def clear_webhook(self):
@@ -1189,14 +1238,14 @@ class SimpleTelegramBot:
                 "text": text
             }
             if reply_markup:
-                data["reply_markup"] = reply_markup  # Убираем json.dumps, aiohttp сам сериализует
+                data["reply_markup"] = json.dumps(reply_markup)  # Возвращаем json.dumps для Telegram API
             
             logger.info(f"✏️ EDIT_MESSAGE: Редактирование сообщения {message_id} в чате {chat_id}")
             logger.info(f"✏️ EDIT_MESSAGE: URL: {url}")
             logger.info(f"✏️ EDIT_MESSAGE: Data: {json.dumps(data, ensure_ascii=False)}")
                 
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=data) as response:
+                async with session.post(url, data=data) as response:  # Используем data= вместо json=
                     logger.info(f"✏️ EDIT_MESSAGE: HTTP status: {response.status}")
                     result = await response.json()
                     logger.info(f"✏️ EDIT_MESSAGE: Response: {json.dumps(result, ensure_ascii=False)}")
