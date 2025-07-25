@@ -376,6 +376,22 @@ All health check failures resolved, HTTP server responding on all endpoints, Tel
 - **Result**: Cleaner, more maintainable codebase with single entry point
 - **Status**: Production-ready with minimal file structure
 
+### 2025-07-25: FIXED DUPLICATE MESSAGE PROCESSING BUG ✅
+- **User Issue**: Bot sending double responses - summarized text followed by error "❌ Пересланное сообщение не содержит текста"
+- **Root Cause**: Duplicated text extraction and processing in handle_update and handle_text_message functions
+- **Problem Flow**:
+  1. handle_update extracts text and processes commands/texts
+  2. handle_update calls handle_text_message with same text
+  3. handle_text_message extracts text again and processes it
+  4. Result: Double processing and error messages
+- **Solution**: 
+  - ✓ Removed duplicated handle_text_message call from handle_update
+  - ✓ Moved text processing logic directly into handle_update
+  - ✓ Eliminated duplicate text extraction functions
+  - ✓ Single-pass message processing with proper error handling
+- **Result**: Users now receive only one response per message
+- **Status**: Duplicate processing bug fixed completely
+
 ### 2025-07-25: RAILWAY POSTGRESQL INTEGRATION ✅
 - **User Request**: Integration with Railway PostgreSQL database for persistent user data and change logging
 - **Database Configuration**:
