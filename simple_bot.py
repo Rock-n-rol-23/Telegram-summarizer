@@ -177,20 +177,25 @@ class SimpleTelegramBot:
         if parse_mode:
             data["parse_mode"] = parse_mode
         if reply_markup:
-            data["reply_markup"] = json.dumps(reply_markup)  # Возвращаем json.dumps для Telegram API
+            data["reply_markup"] = reply_markup  # Убираем json.dumps()
         
         logger.info(f"📤 SEND_MESSAGE: Отправка сообщения в чат {chat_id}")
-        logger.info(f"📤 SEND_MESSAGE: Data: {json.dumps(data, ensure_ascii=False, default=str)}")
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, data=data) as response:  # Используем data= вместо json=
-                    result = await response.json()
-                    if result.get("ok"):
-                        logger.info(f"Сообщение успешно отправлено в чат {chat_id}")
-                    else:
-                        logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {result}")
-                    return result
+                # Используем json=data когда есть reply_markup, иначе data=data
+                if reply_markup:
+                    async with session.post(url, json=data) as response:
+                        result = await response.json()
+                else:
+                    async with session.post(url, data=data) as response:
+                        result = await response.json()
+                        
+                if result.get("ok"):
+                    logger.info(f"Сообщение успешно отправлено в чат {chat_id}")
+                else:
+                    logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {result}")
+                return result
         except Exception as e:
             logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {e}")
             return None
@@ -420,9 +425,7 @@ class SimpleTelegramBot:
         result = await self.send_message(chat_id, text, reply_markup=keyboard)
         logger.info(f"📤 COMPRESSION MENU: Результат отправки: {result}")
         
-        # Добавляем тестовое сообщение для проверки
-        test_result = await self.send_message(chat_id, "⚠️ Тест: если видите это сообщение - проблема в клавиатуре выше")
-        logger.info(f"🧪 COMPRESSION MENU: Тест сообщение отправлено: {test_result}")
+
         
         return result
     
@@ -1238,20 +1241,18 @@ class SimpleTelegramBot:
                 "text": text
             }
             if reply_markup:
-                data["reply_markup"] = json.dumps(reply_markup)  # Возвращаем json.dumps для Telegram API
+                data["reply_markup"] = reply_markup  # Убираем json.dumps()
             
-            logger.info(f"✏️ EDIT_MESSAGE: Редактирование сообщения {message_id} в чате {chat_id}")
-            logger.info(f"✏️ EDIT_MESSAGE: URL: {url}")
-            logger.info(f"✏️ EDIT_MESSAGE: Data: {json.dumps(data, ensure_ascii=False)}")
-                
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, data=data) as response:  # Используем data= вместо json=
-                    logger.info(f"✏️ EDIT_MESSAGE: HTTP status: {response.status}")
-                    result = await response.json()
-                    logger.info(f"✏️ EDIT_MESSAGE: Response: {json.dumps(result, ensure_ascii=False)}")
-                    success = result.get("ok", False)
-                    logger.info(f"✏️ EDIT_MESSAGE: Success: {success}")
-                    return result.get("result") if success else None
+                # Используем json=data когда есть reply_markup, иначе data=data
+                if reply_markup:
+                    async with session.post(url, json=data) as response:
+                        result = await response.json()
+                else:
+                    async with session.post(url, data=data) as response:
+                        result = await response.json()
+                        
+                return result.get("result") if result.get("ok") else None
         except Exception as e:
             logger.error(f"❌ EDIT_MESSAGE ERROR: Ошибка редактирования сообщения: {e}")
             import traceback
