@@ -376,6 +376,20 @@ All health check failures resolved, HTTP server responding on all endpoints, Tel
 - **Result**: Cleaner, more maintainable codebase with single entry point
 - **Status**: Production-ready with minimal file structure
 
+### 2025-07-25: SIMPLIFIED BOT - REMOVED ALL INLINE KEYBOARDS ✅
+- **User Request**: Complete removal of inline keyboards, simplified text-only interface
+- **Changes Made**:
+  - ✓ Removed all inline keyboard functionality and buttons
+  - ✓ Deleted unused methods: handle_callback_query, handle_summarize_command, handle_quick_command
+  - ✓ Removed /summarize and /quick commands from bot menu
+  - ✓ Eliminated callback_query processing from get_updates
+  - ✓ Fixed format selection - always uses bullets (maркированный список)
+  - ✓ Simplified user interaction to text-only commands
+- **Current Commands**: Only /help, /stats, /10, /30, /50
+- **User Interface**: Pure text-based, no complex menus or selections
+- **Output Format**: Always bullet points for all summarizations
+- **Status**: Simplified bot ready for testing
+
 ### 2025-07-24: Fixed Command Processing After Text Normalization 🔧
 - **Issue**: Bot stopped responding to `/start`, `/help`, `/stats` commands after text normalization was added
 - **Root Cause**: Commands were filtered out by length validation (commands are shorter than 10 characters)
