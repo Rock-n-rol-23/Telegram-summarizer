@@ -323,28 +323,34 @@ class SimpleTelegramBot:
         
         help_text = """📖 Как использовать бота:
 
-🔥 БЫСТРАЯ СУММАРИЗАЦИЯ:
-1. Отправь любой текст (минимум 50 символов)
-2. Или перешли любое сообщение из канала/чата
-3. Получи краткое саммари (20-70% от исходного размера)
+🔥 **БЫСТРАЯ СУММАРИЗАЦИЯ:**
+• Отправьте текст → получите сжатие 30%
+• Перешлите сообщение → автоматическая обработка
 
-⚙️ НАСТРАИВАЕМАЯ СУММАРИЗАЦИЯ:
-1. Используй команду /summarize
-2. Выбери уровень сжатия (10%, 30%, 50%)
-3. Выбери формат результата
-4. Отправь текст или пересланные сообщения
+⚡ **БЫСТРЫЕ КОМАНДЫ:**
+• /10 → максимальное сжатие (10%)
+• /30 → сбалансированное сжатие (30%)  
+• /50 → умеренное сжатие (50%)
+• /quick → показать все способы
 
-Особенности:
-• Работаю с текстами любой длины
-• Поддерживаю пересланные сообщения из любых каналов
-• Превосходно понимаю русский язык (используется Llama 3.3 70B)
-• Сохраняю ключевые моменты исходного текста
-• Структурирую саммари для лучшей читаемости
-• Полностью бесплатный - использую Groq API
+💬 **ТЕКСТОВЫЕ КОМАНДЫ:**
+• Отправьте: 10%, 30% или 50%
+• Затем: bullets, paragraph или keywords
+• Потом отправьте текст для обработки
 
-Поддерживаемые языки: Русский, Английский
+⚙️ **НАСТРАИВАЕМАЯ СУММАРИЗАЦИЯ:**
+• /summarize → полное меню с кнопками
+• Выбор сжатия и формата через интерфейс
 
-Лимиты: До 10 запросов в минуту на пользователя"""
+📊 **ДРУГИЕ КОМАНДЫ:**
+• /stats → ваша статистика
+• /help → эта справка
+
+💡 **Особенности:**
+• Минимум 50 символов для обработки
+• Поддержка пересланных сообщений
+• До 10 запросов в минуту
+• Работает на Llama 3.3 70B"""
         
         await self.send_message(chat_id, help_text)
     
@@ -974,6 +980,14 @@ class SimpleTelegramBot:
                             await self.handle_stats_command(update)
                         elif text == "/summarize":
                             await self.handle_summarize_command(update)
+                        elif text == "/quick":
+                            await self.handle_quick_command(update)
+                        elif text in ["/10", "/10%"]:
+                            await self.handle_direct_compression_command(update, "10")
+                        elif text in ["/30", "/30%"]:
+                            await self.handle_direct_compression_command(update, "30")
+                        elif text in ["/50", "/50%"]:
+                            await self.handle_direct_compression_command(update, "50")
                         else:
                             logger.warning(f"Неизвестная команда: {text}")
                             await self.send_message(
@@ -981,6 +995,57 @@ class SimpleTelegramBot:
                                 "❓ Неизвестная команда. Используйте /help для получения справки."
                             )
                     else:
+                        # Проверяем текстовые команды для настраиваемой суммаризации
+                        if user_id in self.user_states:
+                            current_step = self.user_states[user_id].get("step")
+                            
+                            # Обработка выбора уровня сжатия текстом
+                            if current_step == "compression_level" and text.strip() in ["10%", "30%", "50%"]:
+                                compression_level = text.strip().replace("%", "")
+                                self.user_settings[user_id] = {"compression": compression_level}
+                                self.user_states[user_id]["step"] = "format_selection"
+                                
+                                format_text = f"""✅ Выбрано сжатие: {compression_level}%
+
+📋 Теперь выберите формат:
+
+**Отправьте одно из:**
+• **bullets** - маркированный список
+• **paragraph** - связный абзац
+• **keywords** - ключевые слова"""
+                                
+                                await self.send_message(chat_id, format_text)
+                                return
+                            
+                            # Обработка выбора формата текстом
+                            elif current_step == "format_selection" and text.strip().lower() in ["bullets", "paragraph", "keywords"]:
+                                format_type = text.strip().lower()
+                                self.user_settings[user_id]["format"] = format_type
+                                await self.send_text_request(chat_id, user_id)
+                                return
+                            
+                            # Обработка текста в режиме ожидания
+                            elif current_step == "waiting_text":
+                                await self.handle_custom_summarize_text(update, text)
+                                return
+
+                        # Обработка процентов без предварительной настройки (быстрый режим)
+                        if text.strip() in ["10%", "30%", "50%"] and user_id not in self.user_states:
+                            compression_level = text.strip().replace("%", "")
+                            self.user_states[user_id] = {"step": "format_selection"}
+                            self.user_settings[user_id] = {"compression": compression_level}
+                            self.user_messages_buffer[user_id] = []
+                            
+                            format_text = f"""✅ Выбрано сжатие: {compression_level}%
+
+📋 Выберите формат, отправив:
+• **bullets** - маркированный список
+• **paragraph** - связный абзац
+• **keywords** - ключевые слова"""
+                            
+                            await self.send_message(chat_id, format_text)
+                            return
+
                         # Проверяем, находится ли пользователь в режиме настраиваемой суммаризации
                         if user_id in self.user_states and self.user_states[user_id].get("step") == "waiting_text":
                             await self.handle_custom_summarize_text(update, text)
@@ -1108,6 +1173,22 @@ class SimpleTelegramBot:
                 {
                     "command": "summarize",
                     "description": "⚙️ Настраиваемая суммаризация"
+                },
+                {
+                    "command": "quick",
+                    "description": "⚡ Быстрые способы суммаризации"
+                },
+                {
+                    "command": "10",
+                    "description": "🔥 Максимальное сжатие (10%)"
+                },
+                {
+                    "command": "30",
+                    "description": "📝 Сбалансированное сжатие (30%)"
+                },
+                {
+                    "command": "50",
+                    "description": "📄 Умеренное сжатие (50%)"
                 }
             ]
             
@@ -1118,7 +1199,7 @@ class SimpleTelegramBot:
                 async with session.post(url, data=data) as response:
                     result = await response.json()
                     if result.get("ok"):
-                        logger.info("Команды бота установлены: /help, /stats, /summarize")
+                        logger.info("Команды бота установлены: /help, /stats, /summarize, /quick, /10, /30, /50")
                     else:
                         logger.warning(f"Не удалось установить команды: {result}")
                         
@@ -1275,6 +1356,71 @@ class SimpleTelegramBot:
         except Exception as e:
             logger.error(f"Ошибка удаления сообщения: {e}")
             return False
+    
+    async def handle_quick_command(self, update: dict):
+        """Обработка команды /quick для быстрой настройки"""
+        chat_id = update["message"]["chat"]["id"]
+        user_id = update["message"]["from"]["id"]
+        
+        # Очищаем состояние пользователя
+        if user_id in self.user_states:
+            del self.user_states[user_id]
+        if user_id in self.user_settings:
+            del self.user_settings[user_id]
+        if user_id in self.user_messages_buffer:
+            del self.user_messages_buffer[user_id]
+        
+        quick_text = """⚡ Быстрая суммаризация
+
+🎯 **Способ 1: Прямые команды**
+/10 - максимальное сжатие (10%)
+/30 - сбалансированное сжатие (30%)
+/50 - умеренное сжатие (50%)
+
+💬 **Способ 2: Текстовые команды**
+Отправьте процент: 10%, 30%, 50%
+Затем формат: bullets, paragraph, keywords
+Потом отправьте ваш текст
+
+📝 **Способ 3: Простая отправка**
+Просто отправьте текст - получите сжатие 30%
+
+Выберите удобный способ!"""
+        
+        await self.send_message(chat_id, quick_text)
+
+    async def handle_direct_compression_command(self, update: dict, compression_level: str):
+        """Обработка прямых команд сжатия /10, /30, /50"""
+        chat_id = update["message"]["chat"]["id"]
+        user_id = update["message"]["from"]["id"]
+        
+        logger.info(f"🚀 DIRECT COMPRESSION: Команда /{compression_level} от пользователя {user_id}")
+        
+        # Инициализируем состояние пользователя
+        self.user_states[user_id] = {"step": "format_selection"}
+        self.user_settings[user_id] = {"compression": compression_level}
+        self.user_messages_buffer[user_id] = []
+        
+        format_text = f"""✅ Выбрано сжатие: {compression_level}%
+
+📋 Выберите формат результата:
+
+**Отправьте одно из:**
+• **bullets** - маркированный список
+• **paragraph** - связный абзац  
+• **keywords** - ключевые слова
+
+Или используйте кнопки ниже:"""
+        
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "• Маркированный список", "callback_data": "format_bullets"}],
+                [{"text": "📄 Связный абзац", "callback_data": "format_paragraph"}],
+                [{"text": "🏷️ Ключевые слова", "callback_data": "format_keywords"}]
+            ]
+        }
+        
+        await self.send_message(chat_id, format_text, reply_markup=keyboard)
 
 async def main():
     """Главная функция"""
