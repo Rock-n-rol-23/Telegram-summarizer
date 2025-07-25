@@ -817,9 +817,90 @@ class SimpleTelegramBot:
                         if user_id in self.user_states and self.user_states[user_id].get("step") == "waiting_text":
                             await self.handle_custom_summarize_text(update, text)
                         else:
-                            # Обработка текстовых сообщений (обычных и пересланных)
+                            # Прямая обработка текста без дублирования в handle_text_message
                             logger.info(f"Обработка текстового сообщения от пользователя {user_id}")
-                            await self.handle_text_message(update, message_text=text)
+                            
+                            # Проверка лимита запросов
+                            if not self.check_user_rate_limit(user_id):
+                                await self.send_message(chat_id, "⏰ Превышен лимит запросов!\n\nПожалуйста, подождите минуту перед отправкой нового текста. Лимит: 10 запросов в минуту.")
+                                return
+                            
+                            # Проверка на повторную обработку
+                            if user_id in self.processing_users:
+                                await self.send_message(chat_id, "⚠️ Обработка в процессе!\n\nПожалуйста, дождитесь завершения предыдущего запроса.")
+                                return
+                            
+                            # Проверка минимальной длины текста
+                            if len(text) < 50:
+                                await self.send_message(chat_id, f"📝 Текст слишком короткий!\n\nДля качественной суммаризации нужно минимум 50 символов.\nВаш текст: {len(text)} символов.")
+                                return
+                            
+                            # Добавляем пользователя в список обрабатываемых
+                            self.processing_users.add(user_id)
+                            
+                            try:
+                                username = update["message"]["from"].get("username", "")
+                                
+                                # Отправляем сообщение о начале обработки
+                                processing_response = await self.send_message(chat_id, "🤖 Обрабатываю ваш текст...\n\nЭто может занять несколько секунд.")
+                                processing_message_id = processing_response.get("result", {}).get("message_id") if processing_response else None
+                                
+                                start_time = time.time()
+                                
+                                # Получаем уровень сжатия пользователя из базы данных
+                                user_compression_level = self.get_user_compression_level(user_id)
+                                target_ratio = user_compression_level / 100.0
+                                
+                                # Выполняем суммаризацию с пользовательскими настройками
+                                summary = await self.summarize_text(text, target_ratio=target_ratio)
+                                
+                                processing_time = time.time() - start_time
+                                
+                                if summary and not summary.startswith("❌"):
+                                    # Сохраняем запрос в базу данных
+                                    try:
+                                        self.db.save_user_request(user_id, username, len(text), len(summary), processing_time, 'groq')
+                                    except Exception as save_error:
+                                        logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
+                                    
+                                    # Вычисляем статистику
+                                    compression_ratio = len(summary) / len(text)
+                                    
+                                    # Формируем ответ
+                                    response_text = f"""📋 Саммари готово! (Уровень сжатия: {user_compression_level}%)
+
+{summary}
+
+📊 Статистика:
+• Исходный текст: {len(text):,} символов
+• Саммари: {len(summary):,} символов
+• Сжатие: {compression_ratio:.1%}
+• Время обработки: {processing_time:.1f}с"""
+                                    
+                                    # Удаляем сообщение о обработке
+                                    if processing_message_id:
+                                        await self.delete_message(chat_id, processing_message_id)
+                                    
+                                    await self.send_message(chat_id, response_text)
+                                    
+                                    logger.info(f"Успешно обработан текст пользователя {user_id}, сжатие: {compression_ratio:.1%}")
+                                    
+                                else:
+                                    # Удаляем сообщение о обработке
+                                    if processing_message_id:
+                                        await self.delete_message(chat_id, processing_message_id)
+                                    
+                                    await self.send_message(chat_id, "❌ Ошибка при обработке текста!\n\nПопробуйте позже или обратитесь к администратору.")
+                                    
+                                    logger.error(f"Не удалось обработать текст пользователя {user_id}")
+                            
+                            except Exception as e:
+                                logger.error(f"Ошибка при обработке текста пользователя {user_id}: {str(e)}")
+                                await self.send_message(chat_id, f"❌ Произошла ошибка!\n\nПожалуйста, попробуйте позже.")
+                            
+                            finally:
+                                # Удаляем пользователя из списка обрабатываемых
+                                self.processing_users.discard(user_id)
                 else:
                     logger.warning(f"DEBUG: Сообщение не содержит текста после extract_text_from_message: {message}")
                     # Проверяем, есть ли другие типы контента
