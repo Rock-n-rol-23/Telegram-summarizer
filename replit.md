@@ -390,6 +390,7 @@ All health check failures resolved, HTTP server responding on all endpoints, Tel
 - **Dependencies Added**: beautifulsoup4, lxml, validators, python-readability
 - **Database Support**: Web requests saved with 'groq_web' source type
 - **User Experience**: Seamless integration - just send a link and get summary
+- **Welcome Message**: Updated to showcase both text and web page summarization
 - **Status**: Web page summarization fully functional and integrated
 
 ### 2025-07-29: IMPROVED EMOJI AND SHORT TEXT HANDLING ✅
