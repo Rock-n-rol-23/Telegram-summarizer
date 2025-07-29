@@ -21,6 +21,8 @@ import requests
 from bs4 import BeautifulSoup
 import validators
 from urllib.parse import urlparse
+from readability import parse
+from youtube_processor import YouTubeProcessor
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -74,6 +76,10 @@ class SimpleTelegramBot:
         database_url = os.getenv('DATABASE_URL', 'sqlite:///bot_database.db')
         self.db = DatabaseManager(database_url)
         self.db.init_database()
+        
+        # Инициализация YouTube процессора
+        self.youtube_processor = YouTubeProcessor(groq_client=self.groq_client)
+        logger.info("YouTube процессор инициализирован")
         
         logger.info("Simple Telegram Bot инициализирован")
     
@@ -318,11 +324,13 @@ class SimpleTelegramBot:
 📝 **Что я умею:**
 • Суммаризация любого текста или пересланного сообщения
 • Краткое изложение веб-статей - просто пришли ссылку!
+• Резюме YouTube видео с извлечением субтитров
 • Настраиваемые уровни сжатия: 10%, 30%, 50%
 
 🚀 **Начни прямо сейчас:**
 • Отправь текст → получи саммари
 • Пришли ссылку на статью → получи резюме
+• Пришли YouTube ссылку → получи краткое содержание видео
 • Используй /10, /30, /50 для выбора уровня сжатия
 
 📋 **Команды:**
@@ -347,6 +355,12 @@ class SimpleTelegramBot:
 • Отправьте ссылку на статью → получите краткое резюме
 • Поддержка: Хабр, РБК, новостных сайтов, блогов
 • Максимум 3 ссылки за раз
+
+🎥 **СУММАРИЗАЦИЯ YOUTUBE ВИДЕО:**
+• Отправьте ссылку на YouTube → резюме видео
+• Извлечение субтитров и описания видео
+• Структурированное резюме с ключевыми моментами
+• Обработка видео до 2 часов
 
 ⚡ **КОМАНДЫ СУММАРИЗАЦИИ:**
 • /10 → максимальное сжатие (10%)
@@ -914,7 +928,14 @@ class SimpleTelegramBot:
                         if user_id in self.user_states and self.user_states[user_id].get("step") == "waiting_text":
                             await self.handle_custom_summarize_text(update, text)
                         else:
-                            # Проверяем, есть ли URL в сообщении
+                            # Проверяем, есть ли YouTube URL в сообщении
+                            youtube_urls = self.youtube_processor.extract_youtube_urls(text)
+                            if youtube_urls:
+                                # Обработка YouTube видео
+                                await self.handle_youtube_message(update, youtube_urls)
+                                return
+                            
+                            # Проверяем, есть ли обычные URL в сообщении
                             urls = self.extract_urls_from_message(text)
                             if urls:
                                 # Обработка сообщений с URL
@@ -1434,6 +1455,198 @@ class SimpleTelegramBot:
         self.user_settings[user_id]["format"] = "bullets"  # Всегда маркированный список
         
         await self.send_text_request(chat_id, user_id)
+
+    async def handle_youtube_message(self, update: dict, youtube_urls: list):
+        """Обработчик сообщений с YouTube URL для суммаризации видео"""
+        message = update["message"]
+        chat_id = message["chat"]["id"]
+        user_id = message["from"]["id"]
+        
+        logger.info(f"🎥 YouTube обработка: получено {len(youtube_urls)} ссылок от пользователя {user_id}")
+        
+        # Проверка лимита запросов
+        if not self.check_user_rate_limit(user_id):
+            await self.send_message(chat_id, "⏰ Превышен лимит запросов!\n\nПожалуйста, подождите минуту перед отправкой новых ссылок. Лимит: 10 запросов в минуту.")
+            return
+        
+        # Проверка на повторную обработку
+        if user_id in self.processing_users:
+            await self.send_message(chat_id, "⚠️ Обработка в процессе!\n\nПожалуйста, дождитесь завершения предыдущего запроса.")
+            return
+        
+        # Ограничиваем количество видео (максимум 1)
+        youtube_url_info = youtube_urls[0]
+        url = youtube_url_info['url']
+        
+        if len(youtube_urls) > 1:
+            await self.send_message(
+                chat_id,
+                "⚠️ Обрабатываю только первое видео из списка.\n\nПожалуйста, отправляйте YouTube видео по одному."
+            )
+        
+        # Отправляем сообщение о начале обработки
+        processing_response = await self.send_message(
+            chat_id, 
+            "🎥 Начинаю обработку YouTube видео...\n\n⏳ Извлекаю субтитры и описание..."
+        )
+        processing_message_id = processing_response.get("result", {}).get("message_id") if processing_response else None
+        
+        # Добавляем пользователя в список обрабатываемых
+        self.processing_users.add(user_id)
+        
+        try:
+            username = message["from"].get("username", "")
+            start_time = time.time()
+            
+            # Этап 1: Проверка видео
+            await self.edit_message(
+                chat_id, processing_message_id,
+                "🔍 Проверяю доступность и параметры видео..."
+            )
+            
+            validation = self.youtube_processor.validate_youtube_url(url)
+            if not validation['valid']:
+                await self.edit_message(
+                    chat_id, processing_message_id,
+                    f"❌ {validation['error']}"
+                )
+                return
+            
+            video_title = validation['title']
+            video_duration = validation['duration']
+            video_uploader = validation['uploader']
+            
+            # Этап 2: Извлечение контента
+            await self.edit_message(
+                chat_id, processing_message_id,
+                f"📝 Извлекаю субтитры и описание...\n📹 {video_title[:60]}..."
+            )
+            
+            content_result = self.youtube_processor.extract_video_info_and_subtitles(url)
+            if not content_result['success']:
+                await self.edit_message(
+                    chat_id, processing_message_id,
+                    f"❌ {content_result['error']}\n\nПопробуйте другое видео с субтитрами."
+                )
+                return
+            
+            # Этап 3: Создание резюме
+            await self.edit_message(
+                chat_id, processing_message_id,
+                "🤖 Создаю структурированное резюме через Groq AI..."
+            )
+            
+            # Получаем уровень сжатия пользователя
+            user_compression_level = self.get_user_compression_level(user_id)
+            
+            summary_result = self.youtube_processor.summarize_youtube_content(
+                content_result['text'],
+                video_title,
+                video_duration
+            )
+            
+            if not summary_result['success']:
+                # Fallback на простое резюме
+                summary_result = self.youtube_processor.create_fallback_summary(
+                    content_result['text'],
+                    video_title
+                )
+            
+            processing_time = time.time() - start_time
+            
+            if summary_result['success']:
+                summary_text = summary_result['summary']
+                
+                # Сохраняем запрос в базу данных
+                try:
+                    self.db.save_user_request(
+                        user_id, username, 
+                        len(content_result['text']), 
+                        len(summary_text), 
+                        processing_time, 
+                        'groq_youtube'
+                    )
+                except Exception as save_error:
+                    logger.error(f"Ошибка сохранения YouTube запроса в БД: {save_error}")
+                
+                # Формируем финальный ответ
+                duration_str = f"{video_duration//60}:{video_duration%60:02d}"
+                content_length = len(content_result['text'])
+                
+                # Определяем источники контента
+                sources = []
+                if content_result.get('has_subtitles'):
+                    sources.append("субтитры")
+                if content_result.get('has_description'):
+                    sources.append("описание")
+                sources_text = " + ".join(sources) if sources else "доступный контент"
+                
+                response = f"""🎥 **Резюме YouTube видео** (Уровень сжатия: {user_compression_level}%)
+
+📺 **Название:** {video_title}
+👤 **Автор:** {video_uploader}
+⏱️ **Длительность:** {duration_str}
+🔗 **Ссылка:** {url}
+
+📋 **Резюме содержания:**
+{summary_text}
+
+📊 **Статистика обработки:**
+• Источник текста: {sources_text}
+• Контент: {content_length:,} символов
+• Резюме: {len(summary_text):,} символов
+• Время обработки: {processing_time:.1f}с
+• Метод: yt-dlp + Groq (Llama 3.3)"""
+
+                # Отправляем результат
+                await self.edit_message(
+                    chat_id, processing_message_id,
+                    response
+                )
+                
+                logger.info(f"✅ Успешно обработано YouTube видео от пользователя {user_id}: {video_title[:50]}...")
+                
+            else:
+                await self.edit_message(
+                    chat_id, processing_message_id,
+                    "❌ Не удалось создать резюме видео\n\nПопробуйте другое видео или обратитесь к администратору."
+                )
+                
+        except Exception as e:
+            logger.error(f"Критическая ошибка при обработке YouTube видео: {str(e)}")
+            await self.edit_message(
+                chat_id, processing_message_id,
+                f"❌ Произошла критическая ошибка!\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
+            )
+        
+        finally:
+            # Удаляем пользователя из списка обрабатываемых
+            self.processing_users.discard(user_id)
+
+    async def edit_message(self, chat_id: int, message_id: int, text: str):
+        """Редактирование существующего сообщения"""
+        if not message_id:
+            return
+            
+        url = f"{self.base_url}/editMessageText"
+        data = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text[:4096],
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data) as response:
+                    result = await response.json()
+                    if not result.get("ok"):
+                        logger.warning(f"Не удалось отредактировать сообщение: {result}")
+                    return result
+        except Exception as e:
+            logger.error(f"Ошибка редактирования сообщения: {e}")
+            return None
 
 async def main():
     """Главная функция"""
