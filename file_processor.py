@@ -99,26 +99,28 @@ class FileProcessor:
             text = ""
             
             # Сначала пробуем pdfplumber (лучше для сложных PDF)
-            try:
-                with pdfplumber.open(file_path) as pdf:
-                    for page in pdf.pages:
-                        page_text = page.extract_text()
-                        if page_text:
-                            text += page_text + "\n\n"
-                            
-                if text.strip():
-                    return {
-                        'success': True,
-                        'text': text.strip(),
-                        'method': 'pdfplumber'
-                    }
-            except Exception as e:
-                logger.warning(f"pdfplumber не сработал: {e}")
+            if HAS_PDF_SUPPORT:
+                try:
+                    with pdfplumber.open(file_path) as pdf:
+                        for page in pdf.pages:
+                            page_text = page.extract_text()
+                            if page_text:
+                                text += page_text + "\n\n"
+                                
+                    if text.strip():
+                        return {
+                            'success': True,
+                            'text': text.strip(),
+                            'method': 'pdfplumber'
+                        }
+                except Exception as e:
+                    logger.warning(f"pdfplumber не сработал: {e}")
             
             # Fallback на PyPDF2
-            try:
-                with open(file_path, 'rb') as file:
-                    reader = PyPDF2.PdfReader(file)
+            if HAS_PDF_SUPPORT:
+                try:
+                    with open(file_path, 'rb') as file:
+                        reader = PyPDF2.PdfReader(file)
                     
                     # Проверяем, зашифрован ли PDF
                     if reader.is_encrypted:
@@ -132,23 +134,23 @@ class FileProcessor:
                         if page_text:
                             text += page_text + "\n\n"
                             
-                if text.strip():
-                    return {
-                        'success': True,
-                        'text': text.strip(),
-                        'method': 'PyPDF2'
-                    }
-                else:
+                    if text.strip():
+                        return {
+                            'success': True,
+                            'text': text.strip(),
+                            'method': 'PyPDF2'
+                        }
+                    else:
+                        return {
+                            'success': False,
+                            'error': 'PDF не содержит извлекаемого текста (возможно, только изображения)'
+                        }
+                        
+                except Exception as e:
                     return {
                         'success': False,
-                        'error': 'PDF не содержит извлекаемого текста (возможно, только изображения)'
+                        'error': f'Ошибка чтения PDF: {str(e)}'
                     }
-                    
-            except Exception as e:
-                return {
-                    'success': False,
-                    'error': f'Ошибка чтения PDF: {str(e)}'
-                }
                 
         except Exception as e:
             return {
@@ -165,6 +167,11 @@ class FileProcessor:
             }
         
         try:
+            if not HAS_DOCX_SUPPORT:
+                return {
+                    'success': False,
+                    'error': 'DOCX библиотеки не установлены'
+                }
             doc = Document(file_path)
             text = ""
             
@@ -208,6 +215,11 @@ class FileProcessor:
             }
         
         try:
+            if not HAS_DOC_SUPPORT:
+                return {
+                    'success': False,
+                    'error': 'DOC библиотеки не установлены'
+                }
             # Пробуем mammoth для DOC файлов
             with open(file_path, "rb") as doc_file:
                 result = mammoth.convert_to_html(doc_file)
