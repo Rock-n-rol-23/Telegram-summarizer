@@ -376,6 +376,19 @@ All health check failures resolved, HTTP server responding on all endpoints, Tel
 - **Result**: Cleaner, more maintainable codebase with single entry point
 - **Status**: Production-ready with minimal file structure
 
+### 2025-07-29: IMPROVED EMOJI AND SHORT TEXT HANDLING ✅
+- **User Issue**: Bot rejecting messages with emoji and spaces due to overly strict text validation
+- **Root Cause**: Text normalization removing emoji/special characters and requiring 10+ "clean" characters
+- **Previous Logic**: `text.replace(' ', '').replace('\n', '').replace('\t', '')` - removed emoji
+- **New Logic**: `''.join(c for c in text if not c.isspace())` - preserves emoji and special characters
+- **Changes Made**:
+  - ✓ Updated text length validation to preserve emoji and special characters
+  - ✓ Reduced minimum character requirement from 10 to 5 for normalization
+  - ✓ Reduced minimum text length from 50 to 20 significant characters
+  - ✓ Improved Unicode handling for international content
+- **Result**: Bot now properly handles emoji, special characters, and shorter meaningful texts
+- **Status**: Text processing improved while maintaining quality standards
+
 ### 2025-07-25: IMPROVED MEDIA MESSAGE HANDLING ✅
 - **User Request**: Remove error messages when forwarding media content (videos, images, etc.)
 - **Previous Behavior**: Bot showed error "❌ Данный тип сообщения не поддерживается" for media without captions
