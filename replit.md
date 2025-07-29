@@ -405,10 +405,12 @@ All health check failures resolved, HTTP server responding on all endpoints, Tel
   - ✓ Support for videos up to 2 hours duration
   - ✓ Real-time processing updates for user feedback
   - ✓ Database integration for YouTube request tracking
+  - ✓ Duration limits clearly communicated to users (up to 2 hours/120 minutes)
 - **Dependencies Added**: yt-dlp>=2025.01.26 for YouTube content extraction
 - **Database Support**: YouTube requests saved with 'groq_youtube' source type
 - **User Experience**: Send YouTube link → get structured video summary
-- **Updated Help**: Enhanced /help and /start commands with YouTube functionality
+- **Updated Help**: Enhanced /help and /start commands with YouTube functionality and duration limits
+- **User Interface**: Clear duration information in welcome and help messages
 - **Status**: YouTube video summarization fully operational and integrated
 
 ### 2025-07-29: IMPROVED EMOJI AND SHORT TEXT HANDLING ✅
