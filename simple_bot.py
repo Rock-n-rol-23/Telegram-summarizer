@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple Telegram Bot для суммаризации текста
+Simple Telegram Bot для суммаризации текста и веб-страниц
 Минимальная версия с прямым использованием Telegram Bot API
 """
 
@@ -8,6 +8,7 @@ import logging
 import asyncio
 import json
 import time
+import re
 from datetime import datetime
 from typing import Dict, Set, Optional
 import os
@@ -16,6 +17,10 @@ import aiohttp
 import sqlite3
 from groq import Groq
 from dotenv import load_dotenv
+import requests
+from bs4 import BeautifulSoup
+import validators
+from urllib.parse import urlparse
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -71,6 +76,100 @@ class SimpleTelegramBot:
         self.db.init_database()
         
         logger.info("Simple Telegram Bot инициализирован")
+    
+    def extract_urls_from_message(self, text: str) -> list:
+        """Извлекает все URL из текста сообщения"""
+        # Паттерн для поиска URL
+        url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+        urls = re.findall(url_pattern, text)
+        
+        # Проверяем валидность каждого URL
+        valid_urls = []
+        for url in urls:
+            if validators.url(url):
+                valid_urls.append(url)
+        
+        return valid_urls
+    
+    def extract_webpage_content(self, url: str, timeout: int = 30) -> dict:
+        """Извлекает основной текст с веб-страницы"""
+        try:
+            # Заголовки для имитации браузера
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            
+            # Загрузка страницы
+            response = requests.get(url, headers=headers, timeout=timeout)
+            response.raise_for_status()
+            
+            # Проверка размера контента (максимум 5MB)
+            if len(response.content) > 5 * 1024 * 1024:
+                raise Exception("Файл слишком большой для обработки")
+            
+            # Очистка от HTML тегов напрямую
+            soup = BeautifulSoup(response.content, 'lxml')
+            
+            # Удаление ненужных элементов
+            for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
+                element.decompose()
+            
+            # Извлечение текста
+            text = soup.get_text()
+            
+            # Очистка текста
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            text = ' '.join(chunk for chunk in chunks if chunk)
+            
+            # Получение заголовка страницы
+            title_tag = soup.find('title')
+            title = title_tag.get_text().strip() if title_tag else "Без заголовка"
+            
+            return {
+                'title': title,
+                'content': text,
+                'url': url,
+                'success': True
+            }
+            
+        except requests.exceptions.Timeout:
+            return {'success': False, 'error': 'Время ожидания истекло'}
+        except requests.exceptions.ConnectionError:
+            return {'success': False, 'error': 'Не удается подключиться к сайту'}
+        except requests.exceptions.HTTPError as e:
+            return {'success': False, 'error': f'Ошибка HTTP: {e.response.status_code}'}
+        except Exception as e:
+            return {'success': False, 'error': f'Ошибка при обработке: {str(e)}'}
+    
+    def is_url_allowed(self, url: str) -> bool:
+        """Проверяет, разрешен ли URL для обработки"""
+        blocked_domains = [
+            'facebook.com', 'instagram.com', 'twitter.com', 'x.com',
+            'youtube.com', 'tiktok.com', 'vk.com'  # Социальные сети сложно парсить
+        ]
+        
+        domain = urlparse(url).netloc.lower()
+        
+        for blocked in blocked_domains:
+            if blocked in domain:
+                return False
+        return True
+    
+    def simple_text_summary(self, text: str, max_sentences: int = 3) -> str:
+        """Простая суммаризация без AI - берет первые предложения"""
+        # Разбивка на предложения
+        sentences = re.split(r'[.!?]+', text)
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
+        
+        # Берем первые несколько предложений
+        summary_sentences = sentences[:max_sentences]
+        summary = '. '.join(summary_sentences)
+        
+        if len(summary) > 500:
+            summary = summary[:500] + "..."
+        
+        return summary
     
     def get_user_compression_level(self, user_id: int) -> int:
         """Получение уровня сжатия пользователя из базы данных"""
@@ -253,6 +352,11 @@ class SimpleTelegramBot:
 • Отправьте текст → получите сжатие 30%
 • Перешлите сообщение → автоматическая обработка
 
+🔗 **СУММАРИЗАЦИЯ ВЕБ-СТРАНИЦ:**
+• Отправьте ссылку на статью → получите краткое резюме
+• Поддержка: Хабр, РБК, новостных сайтов, блогов
+• Максимум 3 ссылки за раз
+
 ⚡ **КОМАНДЫ СУММАРИЗАЦИИ:**
 • /10 → максимальное сжатие (10%)
 • /30 → сбалансированное сжатие (30%)  
@@ -267,8 +371,9 @@ class SimpleTelegramBot:
 • /help → эта справка
 
 💡 **Особенности:**
-• Минимум 50 символов для обработки
-• Поддержка пересланных сообщений
+• Минимум 20 символов для текста
+• Поддержка emoji и спецсимволов
+• Автосохранение ваших настроек сжатия
 • До 10 запросов в минуту
 • Работает на Llama 3.3 70B"""
         
@@ -817,6 +922,13 @@ class SimpleTelegramBot:
                         if user_id in self.user_states and self.user_states[user_id].get("step") == "waiting_text":
                             await self.handle_custom_summarize_text(update, text)
                         else:
+                            # Проверяем, есть ли URL в сообщении
+                            urls = self.extract_urls_from_message(text)
+                            if urls:
+                                # Обработка сообщений с URL
+                                await self.handle_url_message(update, urls)
+                                return
+                            
                             # Прямая обработка текста без дублирования в handle_text_message
                             logger.info(f"Обработка текстового сообщения от пользователя {user_id}")
                             
@@ -1123,10 +1235,177 @@ class SimpleTelegramBot:
                 logger.error(f"Ошибка в основном цикле: {e}")
                 await asyncio.sleep(5)
     
+    async def handle_url_message(self, update: dict, urls: list):
+        """Обработчик сообщений с URL для суммаризации веб-страниц"""
+        message = update["message"]
+        chat_id = message["chat"]["id"]
+        user_id = message["from"]["id"]
+        
+        logger.info(f"🔗 URL обработка: получено {len(urls)} ссылок от пользователя {user_id}")
+        
+        # Проверка лимита запросов
+        if not self.check_user_rate_limit(user_id):
+            await self.send_message(chat_id, "⏰ Превышен лимит запросов!\n\nПожалуйста, подождите минуту перед отправкой новых ссылок. Лимит: 10 запросов в минуту.")
+            return
+        
+        # Проверка на повторную обработку
+        if user_id in self.processing_users:
+            await self.send_message(chat_id, "⚠️ Обработка в процессе!\n\nПожалуйста, дождитесь завершения предыдущего запроса.")
+            return
+        
+        # Ограничиваем количество URL за раз
+        urls_to_process = urls[:3]  # Максимум 3 URL за раз
+        
+        # Отправляем сообщение о начале обработки
+        processing_response = await self.send_message(
+            chat_id, 
+            f"🔄 Обрабатываю {len(urls_to_process)} веб-страниц{'у' if len(urls_to_process) == 1 else 'ы'}...\n\nЭто может занять несколько секунд."
+        )
+        processing_message_id = processing_response.get("result", {}).get("message_id") if processing_response else None
+        
+        # Добавляем пользователя в список обрабатываемых
+        self.processing_users.add(user_id)
+        
+        try:
+            username = message["from"].get("username", "")
+            successful_summaries = 0
+            
+            for i, url in enumerate(urls_to_process):
+                try:
+                    logger.info(f"🔗 Обработка URL {i+1}/{len(urls_to_process)}: {url}")
+                    
+                    # Проверяем, разрешен ли домен
+                    if not self.is_url_allowed(url):
+                        await self.send_message(
+                            chat_id,
+                            f"❌ Домен не поддерживается: {urlparse(url).netloc}\n\nСоциальные сети и некоторые другие сайты не поддерживаются."
+                        )
+                        continue
+                    
+                    # Извлекаем контент
+                    start_time = time.time()
+                    content_result = self.extract_webpage_content(url)
+                    
+                    if not content_result['success']:
+                        await self.send_message(
+                            chat_id,
+                            f"❌ Ошибка при загрузке {url[:50]}...:\n{content_result['error']}"
+                        )
+                        continue
+                    
+                    # Проверяем минимальную длину контента
+                    if len(content_result['content']) < 100:
+                        await self.send_message(
+                            chat_id,
+                            f"❌ Слишком мало текста на странице {url[:50]}...\n\nСтраница содержит меньше 100 символов текста."
+                        )
+                        continue
+                    
+                    # Получаем уровень сжатия пользователя
+                    user_compression_level = self.get_user_compression_level(user_id)
+                    target_ratio = user_compression_level / 100.0
+                    
+                    # Суммаризируем с помощью AI
+                    summary = await self.summarize_text(content_result['content'], target_ratio=target_ratio)
+                    
+                    if summary and not summary.startswith("❌"):
+                        # Успешная AI суммаризация
+                        processing_time = time.time() - start_time
+                        
+                        # Сохраняем запрос в базу данных
+                        try:
+                            self.db.save_user_request(user_id, username, len(content_result['content']), len(summary), processing_time, 'groq_web')
+                        except Exception as save_error:
+                            logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
+                        
+                        # Вычисляем статистику
+                        compression_ratio = len(summary) / len(content_result['content'])
+                        
+                        # Формируем красивый ответ
+                        response_text = f"""📄 Резюме статьи (Уровень сжатия: {user_compression_level}%)
 
-    
+🔗 Источник: {content_result['title'][:100]}
+📎 Ссылка: {url}
 
-    
+📝 Основные моменты:
+{summary}
+
+📊 Статистика:
+• Исходный текст: {len(content_result['content']):,} символов
+• Саммари: {len(summary):,} символов  
+• Сжатие: {compression_ratio:.1%}
+• Время обработки: {processing_time:.1f}с"""
+
+                        await self.send_message(chat_id, response_text)
+                        successful_summaries += 1
+                        
+                        logger.info(f"🔗 Успешно обработан URL {i+1}/{len(urls_to_process)}: {url}")
+                        
+                    else:
+                        # Fallback на простую суммаризацию
+                        simple_summary = self.simple_text_summary(content_result['content'])
+                        processing_time = time.time() - start_time
+                        
+                        response_text = f"""📄 Резюме статьи (упрощенная обработка)
+
+🔗 Источник: {content_result['title'][:100]}
+📎 Ссылка: {url}
+
+📝 Основные моменты:
+{simple_summary}
+
+⚠️ Замечание: Использована упрощенная суммаризация
+📊 Исходный текст: {len(content_result['content']):,} символов"""
+
+                        await self.send_message(chat_id, response_text)
+                        successful_summaries += 1
+                        
+                        logger.info(f"🔗 Обработан URL с fallback {i+1}/{len(urls_to_process)}: {url}")
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при обработке URL {url}: {str(e)}")
+                    await self.send_message(
+                        chat_id,
+                        f"❌ Произошла ошибка при обработке {url[:50]}...: {str(e)}"
+                    )
+            
+            # Удаляем сообщение о процессе обработки
+            if processing_message_id:
+                await self.delete_message(chat_id, processing_message_id)
+            
+            # Отправляем итоговое сообщение
+            if successful_summaries > 0:
+                if len(urls) > 3:
+                    await self.send_message(
+                        chat_id,
+                        f"✅ Обработано {successful_summaries} из {len(urls_to_process)} ссылок\n\n💡 Максимум 3 ссылки за раз. Оставшиеся {len(urls) - 3} ссылок отправьте отдельно."
+                    )
+                else:
+                    await self.send_message(
+                        chat_id,
+                        f"✅ Обработано {successful_summaries} из {len(urls_to_process)} ссылок"
+                    )
+            else:
+                await self.send_message(
+                    chat_id,
+                    "❌ Не удалось обработать ни одну ссылку\n\nПопробуйте другие сайты или обратитесь к администратору."
+                )
+        
+        except Exception as e:
+            logger.error(f"Критическая ошибка при обработке URL: {str(e)}")
+            # Удаляем сообщение о процессе обработки
+            if processing_message_id:
+                await self.delete_message(chat_id, processing_message_id)
+            
+            await self.send_message(
+                chat_id,
+                f"❌ Произошла критическая ошибка!\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
+            )
+        
+        finally:
+            # Удаляем пользователя из списка обрабатываемых
+            self.processing_users.discard(user_id)
+
     async def delete_message(self, chat_id: int, message_id: int):
         """Удаление сообщения"""
         try:
