@@ -893,7 +893,7 @@ class SimpleTelegramBot:
                     await self.edit_message(chat_id, processing_message_id, f"📄 Обрабатываю документ: {file_name}\n\n🤖 Создаю резюме...")
                 
                 # Получаем уровень сжатия пользователя
-                compression_ratio = self.db.get_user_compression_level(user_id)
+                compression_ratio = self.get_user_compression_level(user_id)
                 
                 # Суммаризируем извлеченный текст
                 summary = await self.summarize_file_content(extracted_text, file_name, download_result["file_extension"], compression_ratio)
