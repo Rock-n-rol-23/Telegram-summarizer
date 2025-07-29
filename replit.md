@@ -393,6 +393,25 @@ All health check failures resolved, HTTP server responding on all endpoints, Tel
 - **Welcome Message**: Updated to showcase both text and web page summarization
 - **Status**: Web page summarization fully functional and integrated
 
+### 2025-07-29: DOCUMENT SUMMARIZATION FEATURE ADDED ✅
+- **User Request**: Add file summarization functionality to existing Telegram bot for DOC, DOCX, PDF, TXT formats
+- **Implementation**: Comprehensive document processing with AI-powered text extraction and summarization
+- **Features Added**:
+  - ✓ Document upload support via Telegram (up to 20MB limit)
+  - ✓ Multi-format text extraction: PDF, DOCX, DOC, TXT
+  - ✓ Automatic encoding detection for TXT files
+  - ✓ Real-time processing updates with progress messages
+  - ✓ AI-powered structured document summaries via Groq API
+  - ✓ User compression level integration (10%, 30%, 50%)
+  - ✓ Database integration for document request tracking
+  - ✓ Error handling for unsupported formats and corrupted files
+- **Dependencies Added**: aiofiles, PyPDF2, pdfplumber, python-docx, mammoth, chardet
+- **Database Support**: Document requests saved with 'groq_document' source type
+- **User Experience**: Upload document → get structured summary with metadata
+- **Updated Interface**: Enhanced /help and /start commands with document processing info
+- **File Processing**: Created dedicated FileProcessor module for text extraction
+- **Status**: Document summarization fully operational and integrated
+
 ### 2025-07-29: YOUTUBE VIDEO SUMMARIZATION FEATURE ADDED ✅
 - **User Request**: Add YouTube video summarization capability to existing Telegram bot
 - **Implementation**: Comprehensive YouTube video processing with AI-powered transcript summarization

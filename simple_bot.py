@@ -21,8 +21,9 @@ import requests
 from bs4 import BeautifulSoup
 import validators
 from urllib.parse import urlparse
-from readability import parse
+# from readability import parse  # Убрано из-за проблем с установкой
 from youtube_processor import YouTubeProcessor
+from file_processor import FileProcessor
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -80,6 +81,10 @@ class SimpleTelegramBot:
         # Инициализация YouTube процессора
         self.youtube_processor = YouTubeProcessor(groq_client=self.groq_client)
         logger.info("YouTube процессор инициализирован")
+        
+        # Инициализация файлового процессора
+        self.file_processor = FileProcessor()
+        logger.info("Файловый процессор инициализирован")
         
         logger.info("Simple Telegram Bot инициализирован")
     
@@ -319,18 +324,20 @@ class SimpleTelegramBot:
         # Очищаем любые пользовательские клавиатуры
         await self.clear_custom_keyboards(chat_id)
         
-        welcome_text = """🤖 Привет! Я бот для создания кратких саммари текста и веб-страниц.
+        welcome_text = """🤖 Привет! Я бот для создания кратких саммари текста, веб-страниц и документов.
 
 📝 **Что я умею:**
 • Суммаризация любого текста или пересланного сообщения
 • Краткое изложение веб-статей - просто пришли ссылку!
 • Резюме YouTube видео с извлечением субтитров (до 2 часов)
+• Обработка документов: PDF, DOCX, DOC, TXT (до 20MB)
 • Настраиваемые уровни сжатия: 10%, 30%, 50%
 
 🚀 **Начни прямо сейчас:**
 • Отправь текст → получи саммари
 • Пришли ссылку на статью → получи резюме
 • Пришли YouTube ссылку → получи краткое содержание видео
+• Прикрепи документ → получи структурированное резюме
 • Используй /10, /30, /50 для выбора уровня сжатия
 
 📋 **Команды:**
@@ -361,6 +368,12 @@ class SimpleTelegramBot:
 • Извлечение субтитров и описания видео
 • Структурированное резюме с ключевыми моментами
 • ⏱️ Длительность видео: до 2 часов (120 минут)
+
+📄 **СУММАРИЗАЦИЯ ДОКУМЕНТОВ:**
+• Прикрепите файл → получите структурированное резюме
+• Поддерживаемые форматы: PDF, DOCX, DOC, TXT
+• Максимальный размер файла: 20MB (лимит Telegram)
+• Автоматическое извлечение текста из документов
 
 ⚡ **КОМАНДЫ СУММАРИЗАЦИИ:**
 • /10 → максимальное сжатие (10%)
@@ -790,6 +803,253 @@ class SimpleTelegramBot:
             # Удаляем пользователя из списка обрабатываемых
             self.processing_users.discard(user_id)
     
+    async def handle_document_message(self, update: dict):
+        """Обработка документов (PDF, DOCX, DOC, TXT)"""
+        try:
+            message = update["message"]
+            chat_id = message["chat"]["id"]
+            user_id = message["from"]["id"]
+            username = message["from"].get("username", "")
+            document = message["document"]
+            
+            # Проверка лимита запросов
+            if not self.check_user_rate_limit(user_id):
+                await self.send_message(chat_id, "⏰ Превышен лимит запросов!\n\nПожалуйста, подождите минуту перед отправкой нового файла. Лимит: 10 запросов в минуту.")
+                return
+            
+            # Проверка на повторную обработку
+            if user_id in self.processing_users:
+                await self.send_message(chat_id, "⚠️ Обработка в процессе!\n\nПожалуйста, дождитесь завершения предыдущего запроса.")
+                return
+            
+            # Добавляем пользователя в список обрабатываемых
+            self.processing_users.add(user_id)
+            
+            # Проверяем информацию о файле
+            file_name = document.get("file_name", "unknown")
+            file_size = document.get("file_size", 0)
+            
+            logger.info(f"Получен документ от пользователя {user_id}: {file_name} ({file_size} байт)")
+            
+            # Отправляем сообщение о начале обработки
+            processing_message = await self.send_message(chat_id, f"📄 Обрабатываю документ: {file_name}\n\n⏳ Извлекаю текст...")
+            processing_message_id = processing_message.get("result", {}).get("message_id") if processing_message and processing_message.get("ok") else None
+            
+            try:
+                # Получаем информацию о файле от Telegram
+                file_info_response = await self.get_file_info(document["file_id"])
+                if not file_info_response or not file_info_response.get("ok"):
+                    await self.send_message(chat_id, "❌ Не удалось получить информацию о файле")
+                    return
+                
+                file_info = file_info_response["result"]
+                file_path = f"https://api.telegram.org/file/bot{self.token}/{file_info['file_path']}"
+                
+                # Обновляем сообщение о прогрессе
+                if processing_message_id:
+                    await self.edit_message(chat_id, processing_message_id, f"📄 Обрабатываю документ: {file_name}\n\n📥 Скачиваю файл...")
+                
+                # Используем file_processor для скачивания и обработки
+                download_result = await self.file_processor.download_telegram_file(
+                    {"file_path": file_path}, file_name, file_size
+                )
+                
+                if not download_result["success"]:
+                    if processing_message_id:
+                        await self.delete_message(chat_id, processing_message_id)
+                    await self.send_message(chat_id, f"❌ {download_result['error']}")
+                    return
+                
+                # Обновляем сообщение о прогрессе
+                if processing_message_id:
+                    await self.edit_message(chat_id, processing_message_id, f"📄 Обрабатываю документ: {file_name}\n\n📝 Извлекаю текст...")
+                
+                # Извлекаем текст из файла
+                text_result = self.file_processor.extract_text_from_file(
+                    download_result["file_path"], 
+                    download_result["file_extension"]
+                )
+                
+                # Очищаем временные файлы
+                self.file_processor.cleanup_temp_file(download_result["temp_dir"])
+                
+                if not text_result["success"]:
+                    if processing_message_id:
+                        await self.delete_message(chat_id, processing_message_id)
+                    await self.send_message(chat_id, f"❌ {text_result['error']}")
+                    return
+                
+                extracted_text = text_result["text"]
+                
+                # Проверяем длину извлеченного текста
+                if len(extracted_text) < 100:
+                    if processing_message_id:
+                        await self.delete_message(chat_id, processing_message_id)
+                    await self.send_message(chat_id, f"📝 Текст слишком короткий!\n\nИз документа извлечено {len(extracted_text)} символов. Для качественной суммаризации нужно минимум 100 символов.")
+                    return
+                
+                # Обновляем сообщение о прогрессе
+                if processing_message_id:
+                    await self.edit_message(chat_id, processing_message_id, f"📄 Обрабатываю документ: {file_name}\n\n🤖 Создаю резюме...")
+                
+                # Получаем уровень сжатия пользователя
+                compression_ratio = self.db.get_user_compression_level(user_id)
+                
+                # Суммаризируем извлеченный текст
+                summary = await self.summarize_file_content(extracted_text, file_name, download_result["file_extension"], compression_ratio)
+                
+                if summary:
+                    # Формируем итоговый ответ
+                    response_text = f"""📄 **Резюме документа: {file_name}**
+
+{summary}
+
+📊 **Статистика:**
+• Исходный документ: {len(extracted_text):,} символов
+• Резюме: {len(summary):,} символов  
+• Сжатие: {compression_ratio:.0%}
+• Метод извлечения: {text_result.get('method', 'unknown')}"""
+                    
+                    # Удаляем сообщение о обработке
+                    if processing_message_id:
+                        await self.delete_message(chat_id, processing_message_id)
+                    
+                    await self.send_message(chat_id, response_text)
+                    
+                    # Сохраняем в базу данных
+                    try:
+                        self.db.save_user_request(user_id, f"document:{file_name}", len(extracted_text), len(summary), 0.0, 'groq_document')
+                    except Exception as save_error:
+                        logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
+                    
+                    logger.info(f"Успешно обработан документ {file_name} пользователя {user_id}")
+                    
+                else:
+                    if processing_message_id:
+                        await self.delete_message(chat_id, processing_message_id)
+                    await self.send_message(chat_id, "❌ Ошибка при создании резюме документа!\n\nПопробуйте позже или обратитесь к администратору.")
+                    
+            except Exception as e:
+                logger.error(f"Ошибка при обработке документа: {e}")
+                if processing_message_id:
+                    await self.delete_message(chat_id, processing_message_id)
+                await self.send_message(chat_id, f"❌ Произошла ошибка при обработке документа!\n\nПожалуйста, попробуйте позже.")
+                
+        except Exception as e:
+            logger.error(f"Общая ошибка при обработке документа: {e}")
+            await self.send_message(chat_id, "❌ Произошла ошибка!\n\nПожалуйста, попробуйте позже.")
+            
+        finally:
+            # Удаляем пользователя из списка обрабатываемых
+            self.processing_users.discard(user_id)
+    
+    async def get_file_info(self, file_id: str):
+        """Получает информацию о файле от Telegram API"""
+        try:
+            url = f"{self.base_url}/getFile"
+            params = {"file_id": file_id}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as response:
+                    return await response.json()
+        except Exception as e:
+            logger.error(f"Ошибка получения информации о файле: {e}")
+            return None
+    
+    async def edit_message(self, chat_id: int, message_id: int, text: str):
+        """Редактирует существующее сообщение"""
+        try:
+            url = f"{self.base_url}/editMessageText"
+            data = {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "parse_mode": "Markdown"
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data) as response:
+                    return await response.json()
+        except Exception as e:
+            logger.error(f"Ошибка редактирования сообщения: {e}")
+            return None
+    
+    async def summarize_file_content(self, text: str, file_name: str = "", file_type: str = "", compression_ratio: float = 0.3) -> str:
+        """Создает резюме содержимого файла через Groq API"""
+        try:
+            if not self.groq_client:
+                return "❌ Groq API недоступен"
+            
+            # Ограничиваем длину текста
+            max_chars = 15000  # Увеличиваем лимит для документов
+            original_length = len(text)
+            
+            if len(text) > max_chars:
+                text = text[:max_chars] + "...\n[Текст обрезан для обработки]"
+            
+            # Определяем длину резюме в зависимости от размера документа и уровня сжатия
+            target_length = int(original_length * compression_ratio)
+            
+            if target_length < 200:  # Минимальная длина резюме
+                summary_length = "100-200 слов"
+                max_tokens = 250
+            elif target_length < 800:  # Средняя длина
+                summary_length = "200-500 слов"
+                max_tokens = 550
+            else:  # Длинное резюме
+                summary_length = "400-800 слов"
+                max_tokens = 850
+            
+            # Определяем тип документа для лучшего промпта
+            file_type_desc = {
+                '.pdf': 'PDF документа',
+                '.docx': 'Word документа',
+                '.doc': 'Word документа',
+                '.txt': 'текстового файла'
+            }.get(file_type, 'документа')
+            
+            prompt = f"""Ты - эксперт по анализу документов. Создай подробное резюме {file_type_desc} на том же языке, что и исходный текст.
+
+Требования к резюме:
+- Длина: {summary_length} (сжатие {compression_ratio:.0%})
+- Структурированный формат с заголовками
+- Сохрани все ключевые моменты и важную информацию
+- Если документ на русском - отвечай на русском языке
+
+Формат резюме:
+📝 **Основное содержание:**
+• Ключевые темы и идеи (2-3 пункта)
+
+🔍 **Детали:**
+• Важные факты и данные (3-5 пунктов)
+
+💡 **Выводы:**
+• Основные заключения (1-2 пункта)
+
+Начни ответ сразу с резюме, без вступлений.
+
+Содержимое документа:
+{text}"""
+            
+            response = self.groq_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                temperature=0.3,
+                max_tokens=max_tokens,
+                top_p=0.9,
+                stream=False
+            )
+            
+            if response.choices and response.choices[0].message:
+                summary = response.choices[0].message.content
+                if summary:
+                    return summary.strip()
+            return "❌ Не удалось получить ответ от модели"
+            
+        except Exception as e:
+            logger.error(f"Ошибка при суммаризации файла: {e}")
+            return f"❌ Ошибка при обработке: {str(e)[:100]}"
+    
     async def handle_update(self, update: dict):
         """Обработка обновлений от Telegram"""
         try:
@@ -1028,9 +1288,13 @@ class SimpleTelegramBot:
                             finally:
                                 # Удаляем пользователя из списка обрабатываемых
                                 self.processing_users.discard(user_id)
+                elif "document" in message:
+                    # Обработка документов (PDF, DOCX, DOC, TXT)
+                    await self.handle_document_message(update)
+                    return
                 else:
-                    # Проверяем, есть ли медиа контент
-                    if any(key in message for key in ['photo', 'video', 'document', 'audio', 'voice', 'sticker', 'animation', 'video_note']):
+                    # Проверяем, есть ли другой медиа контент
+                    if any(key in message for key in ['photo', 'video', 'audio', 'voice', 'sticker', 'animation', 'video_note']):
                         # Медиа сообщение без текста - просто игнорируем без ошибки
                         logger.info(f"Получено медиа сообщение без текста от пользователя {user_id} - игнорируем")
                         return
