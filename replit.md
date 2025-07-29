@@ -393,6 +393,24 @@ All health check failures resolved, HTTP server responding on all endpoints, Tel
 - **Welcome Message**: Updated to showcase both text and web page summarization
 - **Status**: Web page summarization fully functional and integrated
 
+### 2025-07-29: YOUTUBE VIDEO SUMMARIZATION FEATURE ADDED ✅
+- **User Request**: Add YouTube video summarization capability to existing Telegram bot
+- **Implementation**: Comprehensive YouTube video processing with AI-powered transcript summarization
+- **Features Added**:
+  - ✓ YouTube URL detection and extraction from messages
+  - ✓ Video metadata validation (title, duration, uploader)
+  - ✓ Automatic subtitle/transcript extraction using yt-dlp
+  - ✓ AI-powered content summarization via Groq API (Llama 3.3 70B)
+  - ✓ Structured video summaries with key insights
+  - ✓ Support for videos up to 2 hours duration
+  - ✓ Real-time processing updates for user feedback
+  - ✓ Database integration for YouTube request tracking
+- **Dependencies Added**: yt-dlp>=2025.01.26 for YouTube content extraction
+- **Database Support**: YouTube requests saved with 'groq_youtube' source type
+- **User Experience**: Send YouTube link → get structured video summary
+- **Updated Help**: Enhanced /help and /start commands with YouTube functionality
+- **Status**: YouTube video summarization fully operational and integrated
+
 ### 2025-07-29: IMPROVED EMOJI AND SHORT TEXT HANDLING ✅
 - **User Issue**: Bot rejecting messages with emoji and spaces due to overly strict text validation
 - **Root Cause**: Text normalization removing emoji/special characters and requiring 10+ "clean" characters
