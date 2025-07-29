@@ -748,9 +748,8 @@ class SimpleTelegramBot:
                     else:
                         logger.info(f"Получено сообщение от пользователя {user_id}: '{text[:50]}...'")
                 elif "forward_from" in message or "forward_from_chat" in message or "forward_origin" in message:
-                    # Пересланное сообщение без текста
-                    logger.warning(f"Пересланное сообщение не содержит текста")
-                    await self.send_message(chat_id, "❌ Пересланное сообщение не содержит текста для суммаризации.\n\nПожалуйста, пересылайте только текстовые сообщения или сообщения с подписями к изображениям.")
+                    # Пересланное сообщение без текста - просто игнорируем без ошибки
+                    logger.info(f"Получено пересланное медиа сообщение без текста от пользователя {user_id} - игнорируем")
                     return
                 
                 if text:
@@ -902,11 +901,14 @@ class SimpleTelegramBot:
                                 # Удаляем пользователя из списка обрабатываемых
                                 self.processing_users.discard(user_id)
                 else:
-                    logger.warning(f"DEBUG: Сообщение не содержит текста после extract_text_from_message: {message}")
-                    # Проверяем, есть ли другие типы контента
-                    if any(key in message for key in ['photo', 'video', 'document', 'audio', 'voice', 'sticker']):
-                        await self.send_message(chat_id, "❌ Данный тип сообщения не поддерживается.\n\nБот работает только с текстовыми сообщениями. Пожалуйста, отправьте или перешлите текстовое сообщение для суммаризации.")
+                    # Проверяем, есть ли медиа контент
+                    if any(key in message for key in ['photo', 'video', 'document', 'audio', 'voice', 'sticker', 'animation', 'video_note']):
+                        # Медиа сообщение без текста - просто игнорируем без ошибки
+                        logger.info(f"Получено медиа сообщение без текста от пользователя {user_id} - игнорируем")
+                        return
                     else:
+                        # Только если сообщение совсем пустое - тогда показываем ошибку
+                        logger.warning(f"DEBUG: Сообщение не содержит ни текста, ни медиа контента: {message}")
                         await self.send_message(chat_id, "❌ Сообщение не содержит текста.\n\nПожалуйста, отправьте текстовое сообщение для суммаризации.")
 
             else:

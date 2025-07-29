@@ -376,6 +376,18 @@ All health check failures resolved, HTTP server responding on all endpoints, Tel
 - **Result**: Cleaner, more maintainable codebase with single entry point
 - **Status**: Production-ready with minimal file structure
 
+### 2025-07-25: IMPROVED MEDIA MESSAGE HANDLING ✅
+- **User Request**: Remove error messages when forwarding media content (videos, images, etc.)
+- **Previous Behavior**: Bot showed error "❌ Данный тип сообщения не поддерживается" for media without captions
+- **New Behavior**: Bot silently ignores media messages without text/captions
+- **Changes Made**:
+  - ✓ Modified forwarded message handling to ignore media without text
+  - ✓ Updated media content detection to silently skip instead of showing errors
+  - ✓ Added comprehensive media type detection (photo, video, document, audio, voice, sticker, animation, video_note)
+  - ✓ Preserved error messages only for completely empty messages
+- **Result**: Clean user experience - no error spam for media content
+- **Status**: Media handling improved, bot functionality preserved
+
 ### 2025-07-25: FIXED DUPLICATE MESSAGE PROCESSING BUG ✅
 - **User Issue**: Bot sending double responses - summarized text followed by error "❌ Пересланное сообщение не содержит текста"
 - **Root Cause**: Duplicated text extraction and processing in handle_update and handle_text_message functions
