@@ -180,7 +180,7 @@ class SimpleTelegramBot:
             logger.error(f"Ошибка получения настроек пользователя {user_id}: {e}")
             return 30
 
-    def update_user_compression_level(self, user_id: int, compression_level: int, username: str = None):
+    def update_user_compression_level(self, user_id: int, compression_level: int, username: str = ""):
         """Обновление уровня сжатия пользователя в базе данных"""
         try:
             logger.info(f"SimpleTelegramBot: начинаю обновление уровня сжатия для пользователя {user_id}: {compression_level}%")
@@ -192,7 +192,7 @@ class SimpleTelegramBot:
 
 
     
-    async def send_message(self, chat_id: int, text: str, parse_mode: Optional[str] = None, reply_markup: dict = None):
+    async def send_message(self, chat_id: int, text: str, parse_mode: Optional[str] = None, reply_markup: Optional[dict] = None):
         """Отправка сообщения с поддержкой inline-клавиатур"""
         url = f"{self.base_url}/sendMessage"
         data = {
@@ -225,21 +225,7 @@ class SimpleTelegramBot:
             logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {e}")
             return None
     
-    async def delete_message(self, chat_id: int, message_id: int):
-        """Удаление сообщения"""
-        url = f"{self.base_url}/deleteMessage"
-        data = {
-            "chat_id": chat_id,
-            "message_id": message_id
-        }
-        
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=data) as response:
-                    return await response.json()
-        except Exception as e:
-            logger.error(f"Ошибка удаления сообщения: {e}")
-            return None
+
     
     def check_user_rate_limit(self, user_id: int) -> bool:
         """Проверка лимита запросов пользователя"""
@@ -327,16 +313,21 @@ class SimpleTelegramBot:
         # Очищаем любые пользовательские клавиатуры
         await self.clear_custom_keyboards(chat_id)
         
-        welcome_text = """🤖 Привет! Я бот для создания кратких саммари текста.
+        welcome_text = """🤖 Привет! Я бот для создания кратких саммари текста и веб-страниц.
 
-Просто отправь мне любой текст или перешли сообщение из любого канала, и я создам его краткое содержание.
+📝 **Что я умею:**
+• Суммаризация любого текста или пересланного сообщения
+• Краткое изложение веб-статей - просто пришли ссылку!
+• Настраиваемые уровни сжатия: 10%, 30%, 50%
 
-Доступные команды:
-/help - помощь
-/stats - статистика
-/summarize - настраиваемая суммаризация
+🚀 **Начни прямо сейчас:**
+• Отправь текст → получи саммари
+• Пришли ссылку на статью → получи резюме
+• Используй /10, /30, /50 для выбора уровня сжатия
 
-Начни прямо сейчас - отправь текст или перешли сообщение!
+📋 **Команды:**
+/help - подробная справка
+/stats - твоя статистика
 
 🔥 Powered by Llama 3.3 70B - лучшая модель для русского языка!"""
         
@@ -567,8 +558,8 @@ class SimpleTelegramBot:
             
             # Сохраняем статистику
             try:
-                username = update["message"]["from"].get("username", "")
-                self.db.save_user_request(user_id, username, total_chars, len(summary), 0.0, 'groq')
+                # username = update["message"]["from"].get("username", "")
+                self.db.save_user_request(user_id, "", total_chars, len(summary), 0.0, 'groq')
             except Exception as save_error:
                 logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
             
@@ -622,7 +613,8 @@ class SimpleTelegramBot:
 Текст для суммаризации:
 {text}"""
             
-            response = self.groq_client.chat.completions.create(
+            if self.groq_client:
+                response = self.groq_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model="llama-3.3-70b-versatile",
                 temperature=0.3,
