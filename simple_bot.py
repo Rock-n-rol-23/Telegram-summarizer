@@ -1893,6 +1893,8 @@ class SimpleTelegramBot:
             return
             
         url = f"{self.base_url}/editMessageText"
+        
+        # Сначала пробуем с Markdown форматированием
         data = {
             "chat_id": chat_id,
             "message_id": message_id,
@@ -1905,6 +1907,19 @@ class SimpleTelegramBot:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=data) as response:
                     result = await response.json()
+                    
+                    # Если ошибка парсинга - пробуем без форматирования
+                    if not result.get("ok") and "can't parse entities" in result.get("description", ""):
+                        logger.info("Повторная отправка без Markdown форматирования")
+                        data_plain = {
+                            "chat_id": chat_id,
+                            "message_id": message_id,
+                            "text": text[:4096],
+                            "disable_web_page_preview": True
+                        }
+                        async with session.post(url, json=data_plain) as response_plain:
+                            result = await response_plain.json()
+                    
                     if not result.get("ok"):
                         logger.warning(f"Не удалось отредактировать сообщение: {result}")
                     return result
