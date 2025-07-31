@@ -184,7 +184,11 @@ class YouTubeProcessor:
     def summarize_youtube_content(self, content: str, video_title: str = "", video_duration: int = 0) -> Dict[str, Any]:
         """Создает резюме контента YouTube видео через Groq API"""
         try:
+            logger.info(f"🎬 Начало суммаризации YouTube: {video_title[:50]}...")
+            logger.info(f"🎬 Длина контента: {len(content)} символов, длительность: {video_duration} сек")
+            
             if not self.groq_client:
+                logger.error("🎬 Groq API клиент не инициализирован")
                 return {
                     'success': False,
                     'error': 'Groq API клиент не инициализирован'
@@ -226,6 +230,7 @@ class YouTubeProcessor:
 
 СТРУКТУРИРОВАННОЕ РЕЗЮМЕ:"""
 
+            logger.info(f"🎬 Отправка запроса к Groq API, макс. токенов: {max_tokens}")
             completion = self.groq_client.chat.completions.create(
                 messages=[
                     {
@@ -241,8 +246,10 @@ class YouTubeProcessor:
                 max_tokens=max_tokens,
                 temperature=0.3
             )
+            logger.info(f"🎬 Получен ответ от Groq API")
             
             summary = completion.choices[0].message.content.strip()
+            logger.info(f"🎬 Суммаризация завершена успешно, длина резюме: {len(summary)} символов")
             
             return {
                 'success': True,
@@ -250,7 +257,8 @@ class YouTubeProcessor:
             }
             
         except Exception as e:
-            logger.error(f"Ошибка суммаризации Groq: {e}")
+            logger.error(f"🎬 Ошибка суммаризации Groq: {e}")
+            logger.error(f"🎬 Тип ошибки: {type(e)}")
             return {
                 'success': False,
                 'error': f'Ошибка суммаризации Groq: {str(e)}'
