@@ -38,7 +38,7 @@ class SmartSummarizer:
                 scores[content_type] = score
         
         if scores:
-            return max(scores, key=scores.get)
+            return max(scores.keys(), key=lambda x: scores[x])
         
         # Дефолтный тип в зависимости от источника
         if source_type == "audio":
@@ -100,7 +100,7 @@ class SmartSummarizer:
         return entities
     
     async def smart_summarize(self, text: str, source_type: str = "text", 
-                            source_name: str = "", compression_ratio: float = 0.3) -> Dict[str, str]:
+                            source_name: str = "", compression_ratio: float = 0.3) -> Dict:
         """Создает умную суммаризацию с извлечением ключевых моментов"""
         try:
             # Анализируем тип контента
@@ -130,7 +130,7 @@ class SmartSummarizer:
                 temperature=0.2
             )
             
-            smart_summary = response.choices[0].message.content.strip()
+            smart_summary = response.choices[0].message.content.strip() if response.choices[0].message.content else "Нет содержимого"
             
             # Создаем дополнительный анализ ключевых инсайтов
             insights_prompt = self._create_insights_prompt(text, entities)
@@ -151,7 +151,7 @@ class SmartSummarizer:
                 temperature=0.1
             )
             
-            key_insights = insights_response.choices[0].message.content.strip()
+            key_insights = insights_response.choices[0].message.content.strip() if insights_response.choices[0].message.content else "Нет инсайтов"
             
             return {
                 "content_type": content_type,
