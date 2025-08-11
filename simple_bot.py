@@ -86,22 +86,6 @@ class SimpleTelegramBot:
         self.file_processor = FileProcessor()
         logger.info("Файловый процессор инициализирован")
         
-        # Инициализация аудио процессора (продакшн версия с полным пайплайном)
-        try:
-            from audio_pipeline.audio_handler import ProductionAudioHandler
-            self.audio_handler = ProductionAudioHandler()
-            logger.info("Продакшн аудио процессор инициализирован")
-        except Exception as e:
-            logger.error(f"Ошибка инициализации аудио процессора: {e}")
-            # Fallback - используем простой хендлер
-            try:
-                from audio_pipeline.simple_handler import SimpleAudioHandler
-                self.audio_handler = SimpleAudioHandler()
-                logger.info("Fallback: простой аудио процессор инициализирован")
-            except Exception as e2:
-                logger.error(f"Fallback также не удался: {e2}")
-                self.audio_handler = None
-        
         logger.info("Simple Telegram Bot инициализирован")
     
     def extract_urls_from_message(self, text: str) -> list:
@@ -340,14 +324,13 @@ class SimpleTelegramBot:
         # Очищаем любые пользовательские клавиатуры
         await self.clear_custom_keyboards(chat_id)
         
-        welcome_text = """🤖 Привет! Я бот для создания кратких саммари текста, веб-страниц, документов и аудио файлов.
+        welcome_text = """🤖 Привет! Я бот для создания кратких саммари текста, веб-страниц и документов.
 
 📝 **Что я умею:**
 • Суммаризация любого текста или пересланного сообщения
 • Краткое изложение веб-статей - просто пришли ссылку!
 • Резюме YouTube видео с извлечением субтитров (до 2 часов)
 • Обработка документов: PDF, DOCX, DOC, TXT (до 20MB)
-• 🎵 Транскрипция и саммари аудио: MP3, WAV, M4A, FLAC (до 90 мин)
 • Настраиваемые уровни сжатия: 10%, 30%, 50%
 
 🚀 **Начни прямо сейчас:**
@@ -355,7 +338,6 @@ class SimpleTelegramBot:
 • Пришли ссылку на статью → получи резюме
 • Пришли YouTube ссылку → получи краткое содержание видео
 • Прикрепи документ → получи структурированное резюме
-• 🎤 Отправь голосовое сообщение или аудиофайл → получи транскрипт и саммари
 • Используй /10, /30, /50 для выбора уровня сжатия
 
 📋 **Команды:**
@@ -392,14 +374,6 @@ class SimpleTelegramBot:
 • Поддерживаемые форматы: PDF, DOCX, DOC, TXT
 • Максимальный размер файла: 20MB (лимит Telegram)
 • Автоматическое извлечение текста из документов
-
-🎵 **СУММАРИЗАЦИЯ АУДИО:**
-• Отправьте голосовое сообщение → получите транскрипт и саммари
-• Прикрепите аудиофайл → автоматическая обработка
-• Поддерживаемые форматы: MP3, WAV, M4A, FLAC, OGG
-• ⏱️ Максимальная длительность: 90 минут
-• 📱 Максимальный размер файла: 50MB
-• Автоматическая транскрипция с помощью Whisper AI
 
 ⚡ **КОМАНДЫ СУММАРИЗАЦИИ:**
 • /10 → максимальное сжатие (10%)
@@ -855,34 +829,6 @@ class SimpleTelegramBot:
             file_name = document.get("file_name", "unknown")
             file_size = document.get("file_size", 0)
             
-            # Проверяем, является ли документ аудиофайлом (по mime-type или расширению)
-            mime_type = document.get("mime_type", "")
-            audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.aac', '.wma']
-            file_extension = os.path.splitext(file_name.lower())[1]
-            
-            if mime_type.startswith("audio/") or file_extension in audio_extensions:
-                # Перенаправляем на обработку аудио
-                logger.info(f"Документ {file_name} определен как аудиофайл (mime: {mime_type}), перенаправляем на аудио обработчик")
-                self.processing_users.discard(user_id)  # Убираем из списка, так как будет обрабатываться аудио обработчиком
-                
-                # Создаем псевдо-аудио сообщение из документа
-                audio_update = {
-                    "message": {
-                        "chat": message["chat"],
-                        "from": message["from"],
-                        "audio": {
-                            "file_id": document["file_id"],
-                            "duration": 0,  # Неизвестно для документов
-                            "file_name": file_name,
-                            "file_size": file_size,
-                            "mime_type": document.get("mime_type", "audio/unknown")
-                        }
-                    }
-                }
-                
-                await self.handle_audio_message(audio_update)
-                return
-            
             logger.info(f"Получен документ от пользователя {user_id}: {file_name} ({file_size} байт)")
             
             # Отправляем сообщение о начале обработки
@@ -1113,15 +1059,7 @@ class SimpleTelegramBot:
                 message = update["message"]
                 logger.info(f"Найдено сообщение в обновлении: {message}")
                 
-                # ПРИОРИТЕТ: проверяем аудио ПЕРВЫМ
-                from audio_pipeline.sync_handler import handle_audio_message_sync
-                audio_handled = handle_audio_message_sync(self, message)
-                
-                if audio_handled:
-                    logger.info("🎵 Аудио сообщение обработано синхронно")
-                    return  # завершаем обработку этого update
-                
-                # Если не аудио - продолжаем как обычно
+                # Проверяем наличие текста в сообщении (обычном или пересланном)
                 text = None
                 chat_id = message["chat"]["id"]
                 user_id = message["from"]["id"]
@@ -1354,21 +1292,9 @@ class SimpleTelegramBot:
                     # Обработка документов (PDF, DOCX, DOC, TXT)
                     await self.handle_document_message(update)
                     return
-                elif "voice" in message:
-                    # Обработка голосовых сообщений
-                    await self.handle_voice_message(update)
-                    return
-                elif "audio" in message:
-                    # Обработка аудиофайлов
-                    await self.handle_audio_message(update)
-                    return
-                elif "video_note" in message:
-                    # Обработка видеосообщений (кружочки)
-                    await self.handle_video_note_message(update)
-                    return
                 else:
                     # Проверяем, есть ли другой медиа контент
-                    if any(key in message for key in ['photo', 'video', 'sticker', 'animation']):
+                    if any(key in message for key in ['photo', 'video', 'audio', 'voice', 'sticker', 'animation', 'video_note']):
                         # Медиа сообщение без текста - просто игнорируем без ошибки
                         logger.info(f"Получено медиа сообщение без текста от пользователя {user_id} - игнорируем")
                         return
@@ -1563,22 +1489,10 @@ class SimpleTelegramBot:
                         logger.info(f"Получено {len(update_list)} обновлений")
                     
                     for update in update_list:
-                        update_id = update.get('update_id')
-                        logger.info(f"Обработка обновления: {update_id}")
-                        
-                        try:
-                            # Полная синхронная обработка ПЕРЕД обновлением offset
-                            await self.handle_update(update)
-                            
-                            # Обновляем offset только ПОСЛЕ успешной обработки
-                            offset = update["update_id"] + 1
-                            logger.info(f"✅ Обновлен offset: {offset}")
-                            
-                        except Exception as e:
-                            logger.error(f"❌ Ошибка обработки update {update_id}: {e}")
-                            # Все равно обновляем offset чтобы не зациклить
-                            offset = update["update_id"] + 1
-                            logger.info(f"⚠️ Offset обновлен после ошибки: {offset}")
+                        logger.info(f"Обработка обновления: {update.get('update_id')}")
+                        await self.handle_update(update)
+                        offset = update["update_id"] + 1
+                        logger.info(f"Обновлен offset: {offset}")
                 else:
                     if updates:
                         error_code = updates.get("error_code")
@@ -2009,196 +1923,6 @@ class SimpleTelegramBot:
                     if not result.get("ok"):
                         logger.warning(f"Не удалось отредактировать сообщение: {result}")
                     return result
-        except Exception as e:
-            logger.error(f"Ошибка редактирования сообщения: {e}")
-            return None
-
-    async def handle_voice_message(self, update: dict):
-        """Обработка голосовых сообщений (продакшн версия)"""
-        if not self.audio_handler:
-            chat_id = update["message"]["chat"]["id"]
-            await self.send_message(chat_id, "❌ Обработка аудио временно недоступна")
-            return
-            
-        try:
-            # Создаем совместимый объект для продакшн хендлера
-            class SimpleUpdate:
-                def __init__(self, update_dict):
-                    self.message = update_dict["message"]
-                    
-            class SimpleContext:
-                def __init__(self, telegram_bot):
-                    self.bot = telegram_bot
-                    
-            simple_update = SimpleUpdate(update)
-            simple_context = SimpleContext(self)
-            
-            await self.audio_handler.process_audio_message(self, simple_update, simple_context)
-            
-        except Exception as e:
-            logger.error(f"Ошибка при обработке голосового сообщения: {e}")
-            chat_id = update["message"]["chat"]["id"]
-            await self.send_message(chat_id, "❌ Ошибка при обработке голосового сообщения")
-
-    async def handle_audio_message(self, update: dict):
-        """Обработка аудиофайлов (продакшн версия)"""
-        if not self.audio_handler:
-            chat_id = update["message"]["chat"]["id"]
-            await self.send_message(chat_id, "❌ Обработка аудио временно недоступна")
-            return
-            
-        try:
-            # Создаем совместимый объект для продакшн хендлера
-            class SimpleUpdate:
-                def __init__(self, update_dict):
-                    self.message = update_dict["message"]
-                    
-            class SimpleContext:
-                def __init__(self, telegram_bot):
-                    self.bot = telegram_bot
-                    
-            simple_update = SimpleUpdate(update)
-            simple_context = SimpleContext(self)
-            
-            await self.audio_handler.process_audio_message(self, simple_update, simple_context)
-            
-        except Exception as e:
-            logger.error(f"Ошибка при обработке аудиофайла: {e}")
-            chat_id = update["message"]["chat"]["id"]
-            await self.send_message(chat_id, "❌ Ошибка при обработке аудиофайла")
-
-    async def handle_video_note_message(self, update: dict):
-        """Обработка видеосообщений (кружочки)"""
-        if not self.audio_handler:
-            chat_id = update["message"]["chat"]["id"]
-            await self.send_message(chat_id, "❌ Обработка видео временно недоступна\n\nПопробуйте позже.")
-            return
-        
-        try:
-            success = await self.audio_handler.handle_video_note(update, None, self)
-            if not success:
-                logger.warning("Аудио обработчик не смог обработать видеосообщение")
-        except Exception as e:
-            logger.error(f"Ошибка при обработке видеосообщения: {e}")
-            chat_id = update["message"]["chat"]["id"]
-            await self.send_message(chat_id, "❌ Ошибка при обработке видеосообщения")
-
-    async def send_document(self, chat_id: int, file_path: str, caption: str = None):
-        """Отправка документа через Telegram API"""
-        url = f"{self.base_url}/sendDocument"
-        
-        try:
-            with open(file_path, 'rb') as document:
-                data = {
-                    'chat_id': chat_id
-                }
-                if caption:
-                    data['caption'] = caption
-                
-                files = {'document': document}
-                
-                import requests
-                response = requests.post(url, data=data, files=files)
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    if result.get('ok'):
-                        logger.info(f"Документ успешно отправлен в чат {chat_id}")
-                        return result
-                    else:
-                        logger.error(f"Ошибка отправки документа: {result}")
-                else:
-                    logger.error(f"HTTP ошибка при отправке документа: {response.status_code}")
-                
-        except Exception as e:
-            logger.error(f"Исключение при отправке документа: {e}")
-        
-        return None
-
-    async def get_file(self, file_id: str) -> dict:
-        """Получение информации о файле через Telegram API"""
-        url = f"{self.base_url}/getFile"
-        data = {"file_id": file_id}
-        
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=data) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        if result.get("ok"):
-                            logger.info(f"Информация о файле получена: {file_id}")
-                            return result["result"]
-                        else:
-                            logger.error(f"Telegram API error: {result}")
-                            return None
-                    else:
-                        logger.error(f"Ошибка получения файла: {response.status}")
-                        return None
-        except Exception as e:
-            logger.error(f"Ошибка получения файла: {e}")
-            return None
-
-    async def download_file(self, file_id: str, dst_path: str) -> str:
-        """Скачивание файла через Telegram API"""
-        try:
-            # Получаем информацию о файле
-            file_info = await self.get_file(file_id)
-            if not file_info:
-                logger.error(f"Не удалось получить информацию о файле: {file_id}")
-                return None
-                
-            file_path = file_info.get("file_path")
-            if not file_path:
-                logger.error(f"file_path не найден для файла: {file_id}")
-                return None
-            
-            # Создаем директорию если нужно
-            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-            
-            # Скачиваем файл
-            file_url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(file_url) as response:
-                    if response.status == 200:
-                        with open(dst_path, 'wb') as f:
-                            async for chunk in response.content.iter_chunked(8192):
-                                f.write(chunk)
-                        logger.info(f"Файл скачан: {dst_path}")
-                        return dst_path
-                    else:
-                        logger.error(f"Ошибка скачивания файла: {response.status}")
-                        return None
-                        
-        except Exception as e:
-            logger.error(f"Ошибка скачивания файла: {e}")
-            return None
-
-    async def edit_message_text(self, chat_id: int, message_id: int, text: str, parse_mode: str = None) -> dict:
-        """Редактирование текста сообщения через Telegram API"""
-        url = f"{self.base_url}/editMessageText"
-        data = {
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": text[:4096]  # Telegram limit
-        }
-        if parse_mode:
-            data["parse_mode"] = parse_mode
-        
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=data) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        if result.get("ok"):
-                            logger.info(f"Сообщение отредактировано в чате {chat_id}")
-                            return result
-                        else:
-                            logger.error(f"Telegram API error: {result}")
-                            return None
-                    else:
-                        logger.error(f"Ошибка редактирования сообщения: {response.status}")
-                        return None
         except Exception as e:
             logger.error(f"Ошибка редактирования сообщения: {e}")
             return None
