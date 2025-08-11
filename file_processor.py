@@ -96,63 +96,81 @@ class FileProcessor:
             }
         
         try:
+            logger.info(f"📄 Начинаю извлечение текста из PDF: {file_path}")
             text = ""
             
             # Сначала пробуем pdfplumber (лучше для сложных PDF)
-            if HAS_PDF_SUPPORT:
-                try:
-                    with pdfplumber.open(file_path) as pdf:
-                        for page in pdf.pages:
-                            page_text = page.extract_text()
-                            if page_text:
-                                text += page_text + "\n\n"
-                                
-                    if text.strip():
-                        return {
-                            'success': True,
-                            'text': text.strip(),
-                            'method': 'pdfplumber'
-                        }
-                except Exception as e:
-                    logger.warning(f"pdfplumber не сработал: {e}")
+            try:
+                logger.info("📄 Пробую pdfplumber...")
+                with pdfplumber.open(file_path) as pdf:
+                    logger.info(f"📄 PDF открыт, страниц: {len(pdf.pages)}")
+                    for i, page in enumerate(pdf.pages):
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n\n"
+                            logger.info(f"📄 Обработана страница {i+1}, символов: {len(page_text)}")
+                            
+                if text.strip():
+                    logger.info(f"📄 pdfplumber успешно, извлечено {len(text)} символов")
+                    return {
+                        'success': True,
+                        'text': text.strip(),
+                        'method': 'pdfplumber'
+                    }
+                else:
+                    logger.warning("📄 pdfplumber не извлек текст")
+            except Exception as e:
+                logger.warning(f"📄 pdfplumber не сработал: {e}")
             
             # Fallback на PyPDF2
-            if HAS_PDF_SUPPORT:
-                try:
-                    with open(file_path, 'rb') as file:
-                        reader = PyPDF2.PdfReader(file)
+            try:
+                logger.info("📄 Пробую PyPDF2...")
+                text = ""  # Сбрасываем текст для PyPDF2
+                with open(file_path, 'rb') as file:
+                    reader = PyPDF2.PdfReader(file)
+                    logger.info(f"📄 PyPDF2 PDF открыт, страниц: {len(reader.pages)}")
                     
                     # Проверяем, зашифрован ли PDF
                     if reader.is_encrypted:
+                        logger.warning("📄 PDF файл защищен паролем")
                         return {
                             'success': False,
                             'error': 'PDF файл защищен паролем'
                         }
                     
-                    for page in reader.pages:
-                        page_text = page.extract_text()
-                        if page_text:
-                            text += page_text + "\n\n"
-                            
-                    if text.strip():
-                        return {
-                            'success': True,
-                            'text': text.strip(),
-                            'method': 'PyPDF2'
-                        }
-                    else:
-                        return {
-                            'success': False,
-                            'error': 'PDF не содержит извлекаемого текста (возможно, только изображения)'
-                        }
+                    for i, page in enumerate(reader.pages):
+                        try:
+                            page_text = page.extract_text()
+                            if page_text:
+                                text += page_text + "\n\n"
+                                logger.info(f"📄 PyPDF2 обработана страница {i+1}, символов: {len(page_text)}")
+                        except Exception as page_error:
+                            logger.warning(f"📄 Ошибка обработки страницы {i+1}: {page_error}")
+                            continue
                         
-                except Exception as e:
+                if text.strip():
+                    logger.info(f"📄 PyPDF2 успешно, извлечено {len(text)} символов")
+                    return {
+                        'success': True,
+                        'text': text.strip(),
+                        'method': 'PyPDF2'
+                    }
+                else:
+                    logger.warning("📄 PyPDF2 не извлек текст")
                     return {
                         'success': False,
-                        'error': f'Ошибка чтения PDF: {str(e)}'
+                        'error': 'PDF не содержит извлекаемого текста (возможно, только изображения)'
                     }
+                    
+            except Exception as e:
+                logger.error(f"📄 Ошибка PyPDF2: {e}")
+                return {
+                    'success': False,
+                    'error': f'Ошибка чтения PDF: {str(e)}'
+                }
                 
         except Exception as e:
+            logger.error(f"📄 Критическая ошибка обработки PDF: {e}")
             return {
                 'success': False,
                 'error': f'Ошибка обработки PDF: {str(e)}'
