@@ -354,3 +354,123 @@ class TextSummarizer:
             'local_available': self.use_local_fallback and _transformers_available,
             'transformers_installed': _transformers_available
         }
+
+def fallback_summary(text: str, compression_ratio: float = 0.3) -> str:
+    """
+    Простая суммаризация без внешних сервисов для случаев критических сбоев
+    """
+    try:
+        # Определяем максимальную длину результата
+        max_length = int(len(text) * compression_ratio)
+        if max_length < 100:
+            max_length = min(100, len(text))
+        
+        # Простое извлечение ключевых предложений
+        sentences = text.split('.')
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
+        
+        # Берем первые и последние предложения как наиболее важные
+        if len(sentences) <= 3:
+            result = '. '.join(sentences)
+        else:
+            # Берем первое, несколько средних и последнее
+            important_sentences = [sentences[0]]
+            
+            # Добавляем средние предложения пропорционально
+            middle_count = max(1, int(len(sentences) * compression_ratio) - 2)
+            step = max(1, len(sentences) // (middle_count + 2))
+            
+            for i in range(step, len(sentences) - step, step):
+                if len(important_sentences) < middle_count + 1:
+                    important_sentences.append(sentences[i])
+            
+            # Добавляем последнее предложение
+            if len(sentences) > 1:
+                important_sentences.append(sentences[-1])
+            
+            result = '. '.join(important_sentences)
+        
+        # Убеждаемся, что результат не превышает максимальную длину
+        if len(result) > max_length:
+            result = result[:max_length].rsplit(' ', 1)[0] + '...'
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Ошибка в fallback_summary: {e}")
+        # Экстренный fallback - просто обрезаем текст
+        max_length = int(len(text) * compression_ratio)
+        return text[:max_length] + '...' if len(text) > max_length else text
+
+def summarize_text_sync(text: str, compression_ratio: float = 0.3) -> str:
+    """
+    Синхронная версия суммаризации для audio pipeline
+    
+    Args:
+        text: текст для суммаризации
+        compression_ratio: коэффициент сжатия (0.1-0.5)
+        
+    Returns:
+        str: суммарированный текст
+    """
+    try:
+        from groq import Groq
+        import os
+        
+        # Инициализируем Groq клиент
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if not groq_api_key:
+            logger.warning("GROQ_API_KEY не найден, используем fallback")
+            return fallback_summary(text, compression_ratio)
+        
+        client = Groq(api_key=groq_api_key)
+        
+        # Определяем уровень сжатия
+        if compression_ratio <= 0.15:
+            level_name = "максимальное"
+            max_tokens = 200
+        elif compression_ratio <= 0.35:
+            level_name = "сбалансированное"
+            max_tokens = 400
+        else:
+            level_name = "умеренное"
+            max_tokens = 600
+        
+        # Создаем промпт для суммаризации аудио
+        prompt = f"""Создай {level_name} резюме следующей аудиозаписи в формате маркированного списка на русском языке.
+
+🎯 **Основное:**
+• Главная тема и ключевые моменты (2-3 пункта)
+
+📋 **Детали:**
+• Важные факты и информация (3-5 пунктов)
+
+💭 **Выводы:**
+• Основные заключения (1-2 пункта)
+
+Начни ответ сразу с резюме, без вступлений.
+
+Текст аудиозаписи:
+{text}"""
+        
+        # Отправляем запрос к Groq
+        response = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.3-70b-versatile",
+            temperature=0.3,
+            max_tokens=max_tokens,
+            top_p=0.9
+        )
+        
+        if response.choices and response.choices[0].message:
+            summary = response.choices[0].message.content
+            if summary:
+                return summary.strip()
+        
+        # Fallback если Groq не ответил
+        logger.warning("Groq не вернул результат, используем fallback")
+        return fallback_summary(text, compression_ratio)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в summarize_text_sync: {e}")
+        return fallback_summary(text, compression_ratio)
