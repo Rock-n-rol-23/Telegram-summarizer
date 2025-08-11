@@ -1141,6 +1141,8 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 # Проверяем, включена ли умная суммаризация
                 smart_mode = self.user_settings.get(user_id, {}).get("smart_mode", False)
                 
+                summarization_start_time = time.time()
+                
                 if smart_mode and self.smart_summarizer:
                     # Умная суммаризация аудио
                     target_ratio = compression_ratio / 100.0
@@ -1149,8 +1151,9 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         source_name=file_name, 
                         compression_ratio=target_ratio
                     )
+                    summarization_time = time.time() - summarization_start_time
                     summary = self.smart_summarizer.format_smart_response(
-                        smart_result, f"аудио: {file_name}", len(transcribed_text)
+                        smart_result, f"аудио: {file_name}", len(transcribed_text), summarization_time
                     )
                 else:
                     # Обычная суммаризация аудио
@@ -1570,6 +1573,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                                         source_name="текстовое сообщение", 
                                         compression_ratio=target_ratio
                                     )
+                                    processing_time = time.time() - start_time
                                     summary = self.smart_summarizer.format_smart_response(
                                         smart_result, "текстовое сообщение", len(text), processing_time
                                     )
@@ -1578,8 +1582,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                                     user_compression_level = self.get_user_compression_level(user_id)
                                     target_ratio = user_compression_level / 100.0
                                     summary = await self.summarize_text(text, target_ratio=target_ratio)
-                                
-                                processing_time = time.time() - start_time
+                                    processing_time = time.time() - start_time
                                 
                                 if summary and not summary.startswith("❌"):
                                     # Сохраняем запрос в базу данных
