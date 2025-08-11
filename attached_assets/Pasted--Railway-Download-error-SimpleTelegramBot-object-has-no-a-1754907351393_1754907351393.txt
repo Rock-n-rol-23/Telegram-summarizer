@@ -1,0 +1,151 @@
+
+В прод‑логах Railway падает обработка аудио:
+	•	Download error: 'SimpleTelegramBot' object has no attribute 'get_file'
+	•	Audio processing error: 'SimpleTelegramBot' object has no attribute 'edit_message_text'
+	•	Аудио приходит как document (mime_type=audio/x-wav) — сейчас хендлеры обрабатывают только voice/audio.
+
+Цель
+	1.	Добавить в наш самописный SimpleTelegramBot недостающие методы get_file, download_file, edit_message_text.
+	2.	Научить пайплайн корректно извлекать file_id из message.document с mime_type начинающимся на audio/.
+	3.	Нормализовать входной WAV → 16 kHz mono перед ASR.
+	4.	Стабилизировать UX: отправка «заглушки» + последующий edit сообщения после распознавания/саммари.
+	5.	Ничего не ломать в существующей суммаризации Llama.
+
+⸻
+
+Изменения (минимально инвазивно)
+
+1) SimpleTelegramBot: добавить недостающие методы
+
+Файл: simple_telegram_bot.py (или как у нас называется класс).
+	•	Реализовать:
+	•	get_file(file_id: str) -> dict → Telegram API getFile
+	•	download_file(file_id: str, dst_path: str) -> str → скачать по file_path из getFile
+	•	edit_message_text(chat_id: int, message_id: int, text: str, parse_mode: str | None = None) -> dict
+	•	Базовые методы уже есть (send_message). Сохраняем используемую библиотеку (requests).
+	•	Учесть self.api_url = https://api.telegram.org/bot{token}, self.file_url = https://api.telegram.org/file/bot{token}.
+
+Требование: не менять существующие сигнатуры уже используемых методов.
+
+2) Downloader: единая точка скачивания
+
+Файл: audio_pipeline/downloader.py
+	•	Функция:
+
+def download_audio(bot, file_id: str, out_dir: str) -> str:
+    """Скачивает файл по file_id в out_dir и возвращает путь к файлу."""
+
+
+	•	Внутри вызвать bot.download_file(file_id, dst_path).
+	•	Создавать out_dir при необходимости.
+	•	Имя файла: tg_{timestamp}_{file_id}.bin (расширение не критично — мы всё равно нормализуем дальше).
+
+3) Извлечение file_id (включая document/audio)
+
+Файл: audio_pipeline/handler.py (или утилита для извлечения)
+	•	Добавить функцию:
+
+def extract_audio_file_id_and_kind(message):
+    if getattr(message, "voice", None):
+        return message.voice.file_id, "voice"
+    if getattr(message, "audio", None):
+        return message.audio.file_id, "audio"
+    doc = getattr(message, "document", None)
+    if doc and (doc.mime_type or "").startswith("audio/"):
+        return doc.file_id, "document-audio"
+    if getattr(message, "video_note", None):
+        return message.video_note.file_id, "video_note"
+    raise ValueError("В сообщении не найден поддерживаемый аудиофайл (voice/audio/document/video_note).")
+
+
+	•	Хендлеры handle_voice/handle_audio/handle_video_note должны использовать эту функцию и уметь работать, когда сообщение пришло как пересланное — у Telegram объект тот же (file_id внутри message.*), отдельную логику по forward_from_* не требуется.
+
+4) Сообщение‑заглушка + edit
+
+В хендлере:
+	•	После детекта аудио отправить «получил аудио, обрабатываю…», сохранить message_id ответа.
+
+sent = bot.send_message(chat_id, "Получил аудио, обрабатываю…")
+status_msg_id = sent["message_id"]
+
+
+	•	В конце обработки:
+
+bot.edit_message_text(chat_id, status_msg_id, final_text, parse_mode="HTML")
+
+
+	•	В случае ошибки — редактировать тем же методом на понятное сообщение об ошибке.
+
+5) Нормализация аудио (ffmpeg)
+
+Файл: utils/ffmpeg.py
+	•	Добавить/проверить функцию:
+
+def to_wav_16k_mono(src, dst, ffmpeg_path=None):
+    import os, shutil, subprocess
+    ff = ffmpeg_path or os.getenv("FFMPEG_PATH", "ffmpeg")
+    assert shutil.which(ff), "ffmpeg not found"
+    cmd = [ff, "-y", "-i", src, "-ac", "1", "-ar", "16000", dst]
+    subprocess.run(cmd, check=True)
+
+
+	•	Даже если пришёл WAV (audio/x-wav) — всё равно прогоняем нормализацию, т.к. формат мог быть стерео/другая частота.
+
+6) Интеграция в пайплайн
+
+Файл: audio_pipeline/handler.py
+	•	Основная последовательность:
+	1.	file_id, kind = extract_audio_file_id_and_kind(message)
+	2.	raw_path = downloader.download_audio(bot, file_id, out_dir="/tmp")
+	3.	wav_path = tmp_unique_path(".wav"); ffmpeg.to_wav_16k_mono(raw_path, wav_path)
+	4.	asr_result = transcriber.transcribe_audio(wav_path, language_hint=None)
+(движок выбирается по ASR_ENGINE; минимум — vosk)
+	5.	summary = summarization_adapter.run_summarization(asr_result["text"], language_hint=asr_result.get("language"))
+	6.	bot.edit_message_text(chat_id, status_msg_id, render_result(summary, asr_result), parse_mode="HTML")
+	7.	Отправить .txt с полной транскрипцией при успехе.
+	•	Всегда чистить временные файлы в finally:.
+
+7) ENV и зависимости
+	•	ENV (Railway):
+
+AUDIO_SUMMARY_ENABLED=true
+ASR_ENGINE=vosk
+FFMPEG_PATH=ffmpeg
+ASR_MAX_DURATION_MIN=20
+
+
+	•	requirements.txt (минимум для старта с Vosk):
+
+requests
+pydub
+soundfile
+librosa
+vosk==0.3.45
+
+
+	•	HF/SpeechBrain (torch/transformers) можно оставить закомментированными до стабилизации Vosk.
+
+8) Проверки/логи
+	•	В начале запуска логировать наличие ffmpeg и выбранный ASR_ENGINE.
+	•	Логировать: тип входа (voice/audio/document/video_note), mime, размер, путь скачанного файла, успешность конвертации, выбранный ASR, длительность пайплайна.
+	•	Не логировать распознанный текст (PII).
+
+⸻
+
+Acceptance Criteria
+	•	Отправка короткого WAV (как document с audio/x-wav) успешно обрабатывается: файл скачан через get_file/download_file, конвертирован, распознан (Vosk), саммари отправлено через edit_message_text, приложен .txt.
+	•	Аналогично работают voice (ogg/opus) и audio (mp3/m4a/wav).
+	•	Нет AttributeError на get_file и edit_message_text.
+	•	При отсутствии ffmpeg — понятная ошибка в логах; при наличии — конвертация проходит.
+	•	Временные файлы удаляются.
+
+Тесты (минимум)
+	•	Юнит‑тест extract_audio_file_id_and_kind для voice/audio/document/video_note.
+	•	Интеграционный «сухой» тест пайплайна: заглушка bot.get_file/download_file → конвертация → вызов transcriber.transcribe_audio (мок) → edit_message_text с итогом.
+
+⸻
+
+Важно
+	•	Не менять существующую реализацию вызова Llama‑суммаризации — использовать через уже имеющийся адаптер/функцию.
+	•	Не добавлять платные API.
+	•	Все правки — дискретные и обратимые.

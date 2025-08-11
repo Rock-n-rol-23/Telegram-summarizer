@@ -86,14 +86,21 @@ class SimpleTelegramBot:
         self.file_processor = FileProcessor()
         logger.info("Файловый процессор инициализирован")
         
-        # Инициализация аудио процессора (простая версия для продакшна)
+        # Инициализация аудио процессора (продакшн версия с полным пайплайном)
         try:
-            from audio_pipeline.simple_handler import SimpleAudioHandler
-            self.audio_handler = SimpleAudioHandler()
-            logger.info("Простой аудио процессор инициализирован для продакшна")
+            from audio_pipeline.audio_handler import ProductionAudioHandler
+            self.audio_handler = ProductionAudioHandler()
+            logger.info("Продакшн аудио процессор инициализирован")
         except Exception as e:
             logger.error(f"Ошибка инициализации аудио процессора: {e}")
-            self.audio_handler = None
+            # Fallback - используем простой хендлер
+            try:
+                from audio_pipeline.simple_handler import SimpleAudioHandler
+                self.audio_handler = SimpleAudioHandler()
+                logger.info("Fallback: простой аудио процессор инициализирован")
+            except Exception as e2:
+                logger.error(f"Fallback также не удался: {e2}")
+                self.audio_handler = None
         
         logger.info("Simple Telegram Bot инициализирован")
     
@@ -848,13 +855,14 @@ class SimpleTelegramBot:
             file_name = document.get("file_name", "unknown")
             file_size = document.get("file_size", 0)
             
-            # Проверяем, является ли документ аудиофайлом
+            # Проверяем, является ли документ аудиофайлом (по mime-type или расширению)
+            mime_type = document.get("mime_type", "")
             audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.aac', '.wma']
             file_extension = os.path.splitext(file_name.lower())[1]
             
-            if file_extension in audio_extensions:
+            if mime_type.startswith("audio/") or file_extension in audio_extensions:
                 # Перенаправляем на обработку аудио
-                logger.info(f"Документ {file_name} определен как аудиофайл, перенаправляем на аудио обработчик")
+                logger.info(f"Документ {file_name} определен как аудиофайл (mime: {mime_type}), перенаправляем на аудио обработчик")
                 self.processing_users.discard(user_id)  # Убираем из списка, так как будет обрабатываться аудио обработчиком
                 
                 # Создаем псевдо-аудио сообщение из документа
@@ -1986,31 +1994,26 @@ class SimpleTelegramBot:
             return None
 
     async def handle_voice_message(self, update: dict):
-        """Обработка голосовых сообщений (простая версия для продакшна)"""
+        """Обработка голосовых сообщений (продакшн версия)"""
         if not self.audio_handler:
             chat_id = update["message"]["chat"]["id"]
             await self.send_message(chat_id, "❌ Обработка аудио временно недоступна")
             return
             
         try:
-            # Создаем совместимый объект
+            # Создаем совместимый объект для продакшн хендлера
             class SimpleUpdate:
                 def __init__(self, update_dict):
-                    self.message = type('obj', (object,), {})()
-                    msg_data = update_dict["message"]
-                    self.message.chat_id = msg_data["chat"]["id"]
-                    if "voice" in msg_data:
-                        self.message.voice = type('obj', (object,), msg_data["voice"])()
+                    self.message = update_dict["message"]
                     
             class SimpleContext:
                 def __init__(self, telegram_bot):
                     self.bot = telegram_bot
-                    self._telegram_bot = telegram_bot
                     
             simple_update = SimpleUpdate(update)
             simple_context = SimpleContext(self)
             
-            await self.audio_handler.process_audio(self, simple_update, simple_context)
+            await self.audio_handler.process_audio_message(self, simple_update, simple_context)
             
         except Exception as e:
             logger.error(f"Ошибка при обработке голосового сообщения: {e}")
@@ -2018,31 +2021,26 @@ class SimpleTelegramBot:
             await self.send_message(chat_id, "❌ Ошибка при обработке голосового сообщения")
 
     async def handle_audio_message(self, update: dict):
-        """Обработка аудиофайлов (простая версия для продакшна)"""
+        """Обработка аудиофайлов (продакшн версия)"""
         if not self.audio_handler:
             chat_id = update["message"]["chat"]["id"]
             await self.send_message(chat_id, "❌ Обработка аудио временно недоступна")
             return
             
         try:
-            # Создаем совместимый объект
+            # Создаем совместимый объект для продакшн хендлера
             class SimpleUpdate:
                 def __init__(self, update_dict):
-                    self.message = type('obj', (object,), {})()
-                    msg_data = update_dict["message"]
-                    self.message.chat_id = msg_data["chat"]["id"]
-                    if "audio" in msg_data:
-                        self.message.audio = type('obj', (object,), msg_data["audio"])()
+                    self.message = update_dict["message"]
                     
             class SimpleContext:
                 def __init__(self, telegram_bot):
                     self.bot = telegram_bot
-                    self._telegram_bot = telegram_bot
                     
             simple_update = SimpleUpdate(update)
             simple_context = SimpleContext(self)
             
-            await self.audio_handler.process_audio(self, simple_update, simple_context)
+            await self.audio_handler.process_audio_message(self, simple_update, simple_context)
             
         except Exception as e:
             logger.error(f"Ошибка при обработке аудиофайла: {e}")
@@ -2096,6 +2094,94 @@ class SimpleTelegramBot:
             logger.error(f"Исключение при отправке документа: {e}")
         
         return None
+
+    async def get_file(self, file_id: str) -> dict:
+        """Получение информации о файле через Telegram API"""
+        url = f"{self.base_url}/getFile"
+        data = {"file_id": file_id}
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        if result.get("ok"):
+                            logger.info(f"Информация о файле получена: {file_id}")
+                            return result["result"]
+                        else:
+                            logger.error(f"Telegram API error: {result}")
+                            return None
+                    else:
+                        logger.error(f"Ошибка получения файла: {response.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"Ошибка получения файла: {e}")
+            return None
+
+    async def download_file(self, file_id: str, dst_path: str) -> str:
+        """Скачивание файла через Telegram API"""
+        try:
+            # Получаем информацию о файле
+            file_info = await self.get_file(file_id)
+            if not file_info:
+                logger.error(f"Не удалось получить информацию о файле: {file_id}")
+                return None
+                
+            file_path = file_info.get("file_path")
+            if not file_path:
+                logger.error(f"file_path не найден для файла: {file_id}")
+                return None
+            
+            # Создаем директорию если нужно
+            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+            
+            # Скачиваем файл
+            file_url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(file_url) as response:
+                    if response.status == 200:
+                        with open(dst_path, 'wb') as f:
+                            async for chunk in response.content.iter_chunked(8192):
+                                f.write(chunk)
+                        logger.info(f"Файл скачан: {dst_path}")
+                        return dst_path
+                    else:
+                        logger.error(f"Ошибка скачивания файла: {response.status}")
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"Ошибка скачивания файла: {e}")
+            return None
+
+    async def edit_message_text(self, chat_id: int, message_id: int, text: str, parse_mode: str = None) -> dict:
+        """Редактирование текста сообщения через Telegram API"""
+        url = f"{self.base_url}/editMessageText"
+        data = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text[:4096]  # Telegram limit
+        }
+        if parse_mode:
+            data["parse_mode"] = parse_mode
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        if result.get("ok"):
+                            logger.info(f"Сообщение отредактировано в чате {chat_id}")
+                            return result
+                        else:
+                            logger.error(f"Telegram API error: {result}")
+                            return None
+                    else:
+                        logger.error(f"Ошибка редактирования сообщения: {response.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"Ошибка редактирования сообщения: {e}")
+            return None
 
 async def main():
     """Главная функция"""

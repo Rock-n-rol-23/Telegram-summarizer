@@ -10,7 +10,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 
-from .downloader import TelegramAudioDownloader
+from .downloader import download_audio_async
 from .transcriber_adapter import transcribe_with_whisper, check_whisper_installation
 from .segmenter import AudioSegmenter
 from .summarization_adapter import run_summarization_with_bot_instance, prepare_audio_summary_response, validate_summarization_input
