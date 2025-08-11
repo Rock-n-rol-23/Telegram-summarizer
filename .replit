@@ -2,7 +2,7 @@ modules = ["python-3.11", "python3", "postgresql-16"]
 
 [nix]
 channel = "stable-24_05"
-packages = ["ffmpeg", "ffmpeg-full", "libsndfile", "pkg-config", "xcodebuild", "zlib"]
+packages = ["ffmpeg", "ffmpeg-full", "libsndfile", "pkg-config", "portaudio", "xcodebuild", "zlib"]
 
 [workflows]
 runButton = "Project"
