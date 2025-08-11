@@ -46,12 +46,14 @@ class Config:
         
         # Настройки аудио обработки
         self.AUDIO_SUMMARY_ENABLED = os.getenv('AUDIO_SUMMARY_ENABLED', 'true').lower() == 'true'
-        self.ASR_VAD_ENABLED = os.getenv('ASR_VAD_ENABLED', 'true').lower() == 'true'
-        self.ASR_MAX_DURATION_MIN = int(os.getenv('ASR_MAX_DURATION_MIN', '90'))
+        self.ASR_ENGINE = os.getenv('ASR_ENGINE', 'vosk')
+        self.ASR_VAD_ENABLED = os.getenv('ASR_VAD_ENABLED', 'false').lower() == 'true'
+        self.ASR_MAX_DURATION_MIN = int(os.getenv('ASR_MAX_DURATION_MIN', '20'))
         self.FFMPEG_PATH = os.getenv('FFMPEG_PATH', 'ffmpeg')
         self.WHISPER_MODEL_SIZE = os.getenv('WHISPER_MODEL_SIZE', 'base')
         self.AUDIO_MAX_FILE_SIZE_MB = int(os.getenv('AUDIO_MAX_FILE_SIZE_MB', '50'))
         self.AUDIO_DEFAULT_COMPRESSION = float(os.getenv('AUDIO_DEFAULT_COMPRESSION', '0.3'))
+        self.VOSK_MODEL_DIR = os.getenv('VOSK_MODEL_DIR', './models/vosk-ru')
         
         # Промпт для суммаризации
         self.SUMMARIZATION_PROMPT = """Ты - эксперт по суммаризации текстов. Создай краткое саммари следующего текста на том же языке, что и исходный текст.
