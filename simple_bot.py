@@ -976,7 +976,10 @@ class SimpleTelegramBot:
             user_id = message["from"]["id"]
             username = message["from"].get("username", "")
             
-            # Определяем тип аудио (audio или voice)
+            logger.info(f"DEBUG: handle_audio_message вызван для пользователя {user_id}")
+            logger.info(f"DEBUG: Содержимое сообщения: {list(message.keys())}")
+            
+            # Определяем тип аудио (audio, voice или document с аудио MIME)
             audio_info = None
             audio_type = ""
             
@@ -984,10 +987,18 @@ class SimpleTelegramBot:
                 audio_info = message["audio"]
                 audio_type = "audio"
                 file_name = audio_info.get("file_name", f"audio_{audio_info['file_id']}.mp3")
+                logger.info(f"DEBUG: Обнаружен тип 'audio': {file_name}")
             elif "voice" in message:
                 audio_info = message["voice"]
                 audio_type = "voice"
                 file_name = f"voice_message_{audio_info['file_id']}.ogg"
+                logger.info(f"DEBUG: Обнаружен тип 'voice': {file_name}")
+            elif "document" in message:
+                # Аудио файл, переданный как документ
+                audio_info = message["document"]
+                audio_type = "document_audio"
+                file_name = audio_info.get("file_name", f"document_audio_{audio_info['file_id']}")
+                logger.info(f"DEBUG: Обнаружен тип 'document_audio': {file_name}, MIME: {audio_info.get('mime_type', 'unknown')}")
             
             if not audio_info:
                 await self.send_message(chat_id, "❌ Не удалось определить тип аудио файла")
@@ -1529,13 +1540,37 @@ class SimpleTelegramBot:
                             finally:
                                 # Удаляем пользователя из списка обрабатываемых
                                 self.processing_users.discard(user_id)
-                elif "document" in message:
-                    # Обработка документов (PDF, DOCX, DOC, TXT)
-                    await self.handle_document_message(update)
-                    return
                 elif "audio" in message or "voice" in message:
-                    # Обработка аудио файлов
+                    # Обработка аудио файлов и голосовых сообщений
                     await self.handle_audio_message(update)
+                    return
+                elif "document" in message:
+                    # Проверяем, не является ли документ аудио файлом
+                    document = message["document"]
+                    mime_type = document.get("mime_type", "")
+                    file_name = document.get("file_name", "").lower()
+                    
+                    # Список аудио MIME-типов и расширений
+                    audio_mime_types = [
+                        "audio/mpeg", "audio/mp3", "audio/wav", "audio/m4a", 
+                        "audio/ogg", "audio/flac", "audio/aac", "audio/opus"
+                    ]
+                    audio_extensions = [".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac", ".opus"]
+                    
+                    is_audio = (
+                        mime_type in audio_mime_types or 
+                        any(file_name.endswith(ext) for ext in audio_extensions)
+                    )
+                    
+                    if is_audio:
+                        logger.info(f"Документ определен как аудио файл: {file_name}, MIME: {mime_type}")
+                        # Создаем псевдо-аудио объект для совместимости с handle_audio_message
+                        audio_message = update.copy()
+                        audio_message["message"]["audio"] = document
+                        await self.handle_audio_message(audio_message)
+                    else:
+                        # Обработка документов (PDF, DOCX, DOC, TXT)
+                        await self.handle_document_message(update)
                     return
                 else:
                     # Проверяем, есть ли другой медиа контент
