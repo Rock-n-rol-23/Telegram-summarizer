@@ -1,26 +1,20 @@
 """
-Audio processing pipeline for Telegram bot
-Handles voice messages, audio files, and video notes with transcription and summarization
+Audio processing pipeline for Railway production
+Production-ready audio handler with multi-engine ASR support
 """
 
-from .handler import AudioHandler
-from .downloader import TelegramAudioDownloader, extract_file_id, download_audio, get_audio_metadata
-from .transcriber_adapter import transcribe_with_whisper
-from .transcriber import transcribe_audio, get_available_engines
-from .segmenter import AudioSegmenter
-from .new_handler import handle_voice, handle_audio, handle_video_note
+from .audio_handler import ProductionAudioHandler
+from .downloader import download_audio_async, download_audio
+from .file_extractor import extract_audio_file_id_and_kind, get_audio_metadata
+from .vosk_transcriber import transcribe_audio, get_available_engines
 
+__version__ = "3.0.0"
 __all__ = [
-    'AudioHandler',
-    'TelegramAudioDownloader', 
-    'transcribe_with_whisper',
-    'transcribe_audio',
-    'AudioSegmenter',
-    'extract_file_id',
-    'download_audio',
-    'get_audio_metadata',
-    'get_available_engines',
-    'handle_voice',
-    'handle_audio', 
-    'handle_video_note'
+    "ProductionAudioHandler",
+    "download_audio_async", 
+    "download_audio",
+    "extract_audio_file_id_and_kind",
+    "get_audio_metadata",
+    "transcribe_audio",
+    "get_available_engines"
 ]
