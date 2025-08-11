@@ -85,7 +85,31 @@ async def transcribe_with_whisper(
     
     # Check if Whisper is available
     if not _check_whisper_availability():
-        raise ImportError("OpenAI Whisper is not installed")
+        # Provide a helpful fallback message instead of completely failing
+        try:
+            import librosa
+            y, sr = librosa.load(src_wav_path, sr=None)
+            duration = len(y) / sr
+        except:
+            duration = 0
+        
+        fallback_text = f"""[ТРАНСКРИПЦИЯ НЕДОСТУПНА]
+
+Для работы с аудио файлами необходимо установить OpenAI Whisper:
+pip install openai-whisper
+
+После установки бот сможет автоматически транскрибировать:
+• Голосовые сообщения
+• Аудиофайлы (MP3, WAV, M4A, FLAC)
+• Видеосообщения с аудиодорожкой
+
+Файл обработан, но транскрипция не выполнена.
+Длительность аудио: ~{duration:.1f} сек."""
+        
+        result["text"] = fallback_text
+        result["duration_sec"] = duration
+        result["language"] = "ru"  # Default language for the message
+        return result
     
     # Initialize model if needed
     if not _initialize_whisper_model(model_size):
