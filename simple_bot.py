@@ -86,6 +86,26 @@ class SimpleTelegramBot:
         self.file_processor = FileProcessor()
         logger.info("Файловый процессор инициализирован")
         
+        # Инициализация аудио процессора
+        try:
+            from audio_pipeline.handler import AudioHandler
+            from config import Config
+            config = Config()
+            audio_config = {
+                'AUDIO_SUMMARY_ENABLED': config.AUDIO_SUMMARY_ENABLED,
+                'ASR_VAD_ENABLED': config.ASR_VAD_ENABLED,
+                'ASR_MAX_DURATION_MIN': config.ASR_MAX_DURATION_MIN,
+                'FFMPEG_PATH': config.FFMPEG_PATH,
+                'WHISPER_MODEL_SIZE': config.WHISPER_MODEL_SIZE,
+                'MAX_FILE_SIZE_MB': config.AUDIO_MAX_FILE_SIZE_MB,
+                'DEFAULT_COMPRESSION_RATIO': getattr(config, 'AUDIO_DEFAULT_COMPRESSION', 0.3)
+            }
+            self.audio_handler = AudioHandler(self.token, audio_config)
+            logger.info("Аудио процессор инициализирован")
+        except Exception as e:
+            logger.error(f"Ошибка инициализации аудио процессора: {e}")
+            self.audio_handler = None
+        
         logger.info("Simple Telegram Bot инициализирован")
     
     def extract_urls_from_message(self, text: str) -> list:
@@ -1292,9 +1312,21 @@ class SimpleTelegramBot:
                     # Обработка документов (PDF, DOCX, DOC, TXT)
                     await self.handle_document_message(update)
                     return
+                elif "voice" in message:
+                    # Обработка голосовых сообщений
+                    await self.handle_voice_message(update)
+                    return
+                elif "audio" in message:
+                    # Обработка аудиофайлов
+                    await self.handle_audio_message(update)
+                    return
+                elif "video_note" in message:
+                    # Обработка видеосообщений (кружочки)
+                    await self.handle_video_note_message(update)
+                    return
                 else:
                     # Проверяем, есть ли другой медиа контент
-                    if any(key in message for key in ['photo', 'video', 'audio', 'voice', 'sticker', 'animation', 'video_note']):
+                    if any(key in message for key in ['photo', 'video', 'sticker', 'animation']):
                         # Медиа сообщение без текста - просто игнорируем без ошибки
                         logger.info(f"Получено медиа сообщение без текста от пользователя {user_id} - игнорируем")
                         return
@@ -1926,6 +1958,86 @@ class SimpleTelegramBot:
         except Exception as e:
             logger.error(f"Ошибка редактирования сообщения: {e}")
             return None
+
+    async def handle_voice_message(self, update: dict):
+        """Обработка голосовых сообщений"""
+        if not self.audio_handler:
+            chat_id = update["message"]["chat"]["id"]
+            await self.send_message(chat_id, "❌ Обработка аудио временно недоступна\n\nПопробуйте позже.")
+            return
+        
+        try:
+            success = await self.audio_handler.handle_voice(update, None, self)
+            if not success:
+                logger.warning("Аудио обработчик не смог обработать голосовое сообщение")
+        except Exception as e:
+            logger.error(f"Ошибка при обработке голосового сообщения: {e}")
+            chat_id = update["message"]["chat"]["id"]
+            await self.send_message(chat_id, "❌ Ошибка при обработке голосового сообщения")
+
+    async def handle_audio_message(self, update: dict):
+        """Обработка аудиофайлов"""
+        if not self.audio_handler:
+            chat_id = update["message"]["chat"]["id"]
+            await self.send_message(chat_id, "❌ Обработка аудио временно недоступна\n\nПопробуйте позже.")
+            return
+        
+        try:
+            success = await self.audio_handler.handle_audio(update, None, self)
+            if not success:
+                logger.warning("Аудио обработчик не смог обработать аудиофайл")
+        except Exception as e:
+            logger.error(f"Ошибка при обработке аудиофайла: {e}")
+            chat_id = update["message"]["chat"]["id"]
+            await self.send_message(chat_id, "❌ Ошибка при обработке аудиофайла")
+
+    async def handle_video_note_message(self, update: dict):
+        """Обработка видеосообщений (кружочки)"""
+        if not self.audio_handler:
+            chat_id = update["message"]["chat"]["id"]
+            await self.send_message(chat_id, "❌ Обработка видео временно недоступна\n\nПопробуйте позже.")
+            return
+        
+        try:
+            success = await self.audio_handler.handle_video_note(update, None, self)
+            if not success:
+                logger.warning("Аудио обработчик не смог обработать видеосообщение")
+        except Exception as e:
+            logger.error(f"Ошибка при обработке видеосообщения: {e}")
+            chat_id = update["message"]["chat"]["id"]
+            await self.send_message(chat_id, "❌ Ошибка при обработке видеосообщения")
+
+    async def send_document(self, chat_id: int, file_path: str, caption: str = None):
+        """Отправка документа через Telegram API"""
+        url = f"{self.base_url}/sendDocument"
+        
+        try:
+            with open(file_path, 'rb') as document:
+                data = {
+                    'chat_id': chat_id
+                }
+                if caption:
+                    data['caption'] = caption
+                
+                files = {'document': document}
+                
+                import requests
+                response = requests.post(url, data=data, files=files)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get('ok'):
+                        logger.info(f"Документ успешно отправлен в чат {chat_id}")
+                        return result
+                    else:
+                        logger.error(f"Ошибка отправки документа: {result}")
+                else:
+                    logger.error(f"HTTP ошибка при отправке документа: {response.status_code}")
+                
+        except Exception as e:
+            logger.error(f"Исключение при отправке документа: {e}")
+        
+        return None
 
 async def main():
     """Главная функция"""
