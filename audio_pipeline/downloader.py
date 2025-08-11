@@ -1,19 +1,135 @@
 """
-Telegram audio file downloader
-Downloads voice messages, audio files, and video notes from Telegram
+Telegram audio downloader for voice messages, audio files, and video notes
+Handles both direct and forwarded messages
 """
 
-import os
 import logging
+import os
 import tempfile
-import aiohttp
-from pathlib import Path
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+def extract_file_id(message):
+    """Extract file_id from direct or forwarded message"""
+    
+    # 1) Direct message
+    if hasattr(message, 'voice') and message.voice:
+        return message.voice.file_id
+    if hasattr(message, 'audio') and message.audio:
+        return message.audio.file_id
+    if hasattr(message, 'video_note') and message.video_note:
+        return message.video_note.file_id
+
+    # 2) Forwarded message
+    fwd = getattr(message, "forward_from", None) or getattr(message, "forward_from_chat", None)
+    if fwd:
+        # Check if message itself has audio data (forwarded messages retain audio)
+        if hasattr(message, 'voice') and message.voice:
+            return message.voice.file_id
+        if hasattr(message, 'audio') and message.audio:
+            return message.audio.file_id
+        if hasattr(message, 'video_note') and message.video_note:
+            return message.video_note.file_id
+
+    raise ValueError("В сообщении не найден поддерживаемый аудиофайл.")
+
+def download_audio(bot, file_id: str, out_dir: str) -> str:
+    """
+    Download audio file from Telegram
+    
+    Args:
+        bot: Telegram bot instance
+        file_id: Telegram file ID
+        out_dir: Output directory
+        
+    Returns:
+        Path to downloaded file
+    """
+    try:
+        # Get file info
+        file_info = bot.get_file(file_id)
+        
+        # Determine extension
+        if file_info.file_path:
+            _, ext = os.path.splitext(file_info.file_path)
+            if not ext:
+                ext = '.ogg'  # Default
+        else:
+            ext = '.ogg'  # Default for voice messages
+        
+        # Create output path
+        output_path = os.path.join(out_dir, f"tg_{file_id}{ext}")
+        
+        # Download
+        file_info.download(custom_path=output_path)
+        
+        logger.info(f"Downloaded audio: {file_id} -> {output_path}")
+        return output_path
+        
+    except Exception as e:
+        logger.error(f"Download failed for {file_id}: {e}")
+        raise RuntimeError(f"Не удалось скачать аудиофайл: {str(e)}")
+
+async def download_audio_async(bot, file_id: str, out_dir: str) -> str:
+    """Async version of download_audio"""
+    try:
+        # Get file info
+        file_info = await bot.get_file(file_id)
+        
+        # Determine extension
+        if file_info.file_path:
+            _, ext = os.path.splitext(file_info.file_path)
+            if not ext:
+                ext = '.ogg'
+        else:
+            ext = '.ogg'
+        
+        # Create output path
+        output_path = os.path.join(out_dir, f"tg_{file_id}{ext}")
+        
+        # Download
+        await file_info.download_to_drive(output_path)
+        
+        logger.info(f"Downloaded audio: {file_id} -> {output_path}")
+        return output_path
+        
+    except Exception as e:
+        logger.error(f"Async download failed for {file_id}: {e}")
+        raise RuntimeError(f"Не удалось скачать аудиофайл: {str(e)}")
+
+def get_audio_metadata(message) -> Dict[str, Any]:
+    """Extract audio metadata from message"""
+    metadata = {
+        "duration": None,
+        "file_size": None,
+        "mime_type": None,
+        "title": None,
+        "performer": None
+    }
+    
+    audio_obj = None
+    
+    # Get audio object
+    if hasattr(message, 'voice') and message.voice:
+        audio_obj = message.voice
+    elif hasattr(message, 'audio') and message.audio:
+        audio_obj = message.audio
+        metadata["title"] = getattr(audio_obj, 'title', None)
+        metadata["performer"] = getattr(audio_obj, 'performer', None)
+    elif hasattr(message, 'video_note') and message.video_note:
+        audio_obj = message.video_note
+    
+    if audio_obj:
+        metadata["duration"] = getattr(audio_obj, 'duration', None)
+        metadata["file_size"] = getattr(audio_obj, 'file_size', None)
+        metadata["mime_type"] = getattr(audio_obj, 'mime_type', None)
+    
+    return metadata
+
+# Legacy class for backward compatibility
 class TelegramAudioDownloader:
-    """Downloads audio files from Telegram Bot API"""
+    """Legacy class - use functions above instead"""
     
     def __init__(self, bot_token: str):
         self.bot_token = bot_token
