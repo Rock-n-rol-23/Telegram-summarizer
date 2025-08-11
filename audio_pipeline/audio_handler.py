@@ -12,11 +12,7 @@ from typing import Optional
 from .file_extractor import extract_audio_file_id_and_kind, get_audio_metadata
 from .downloader import download_audio_async
 from .vosk_transcriber import transcribe_audio
-from utils.ffmpeg import convert_to_wav, is_ffmpeg_available
-
-def to_wav_16k_mono(src: str, dst: str) -> bool:
-    """Wrapper для convert_to_wav с 16kHz mono"""
-    return convert_to_wav(src, dst, sample_rate=16000, channels=1)
+from utils.ffmpeg import to_wav_16k_mono, is_ffmpeg_available
 
 logger = logging.getLogger(__name__)
 

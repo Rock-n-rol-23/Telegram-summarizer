@@ -71,6 +71,14 @@ if __name__ == '__main__':
     logger.info(f"Порт: {port}")
     
     try:
+        # Проверяем FFmpeg при старте
+        import shutil
+        _ff = os.getenv("FFMPEG_PATH", "ffmpeg")
+        if shutil.which(_ff):
+            logger.info(f"✅ FFMPEG OK at: {shutil.which(_ff)}")
+        else:
+            logger.warning(f"❌ FFMPEG not found: {_ff}")
+        
         # Запуск бота в отдельном потоке
         logger.info("Создание потока для Telegram бота...")
         bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)

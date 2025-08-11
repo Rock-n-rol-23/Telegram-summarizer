@@ -1113,7 +1113,15 @@ class SimpleTelegramBot:
                 message = update["message"]
                 logger.info(f"Найдено сообщение в обновлении: {message}")
                 
-                # Проверяем наличие текста в сообщении (обычном или пересланном)
+                # ПРИОРИТЕТ: проверяем аудио ПЕРВЫМ
+                from audio_pipeline.sync_handler import handle_audio_message_sync
+                audio_handled = handle_audio_message_sync(self, message)
+                
+                if audio_handled:
+                    logger.info("🎵 Аудио сообщение обработано синхронно")
+                    return  # завершаем обработку этого update
+                
+                # Если не аудио - продолжаем как обычно
                 text = None
                 chat_id = message["chat"]["id"]
                 user_id = message["from"]["id"]
@@ -1555,10 +1563,22 @@ class SimpleTelegramBot:
                         logger.info(f"Получено {len(update_list)} обновлений")
                     
                     for update in update_list:
-                        logger.info(f"Обработка обновления: {update.get('update_id')}")
-                        await self.handle_update(update)
-                        offset = update["update_id"] + 1
-                        logger.info(f"Обновлен offset: {offset}")
+                        update_id = update.get('update_id')
+                        logger.info(f"Обработка обновления: {update_id}")
+                        
+                        try:
+                            # Полная синхронная обработка ПЕРЕД обновлением offset
+                            await self.handle_update(update)
+                            
+                            # Обновляем offset только ПОСЛЕ успешной обработки
+                            offset = update["update_id"] + 1
+                            logger.info(f"✅ Обновлен offset: {offset}")
+                            
+                        except Exception as e:
+                            logger.error(f"❌ Ошибка обработки update {update_id}: {e}")
+                            # Все равно обновляем offset чтобы не зациклить
+                            offset = update["update_id"] + 1
+                            logger.info(f"⚠️ Offset обновлен после ошибки: {offset}")
                 else:
                     if updates:
                         error_code = updates.get("error_code")

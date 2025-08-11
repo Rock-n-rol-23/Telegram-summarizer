@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import shutil
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -181,3 +182,63 @@ def validate_audio_file(file_path: str) -> bool:
     """
     info = get_audio_info(file_path)
     return info["duration"] > 0 and info["sample_rate"] > 0
+
+def is_ffmpeg_available() -> bool:
+    """Alias for check_ffmpeg"""
+    return check_ffmpeg()
+
+def get_ffmpeg_path() -> str:
+    """Get FFmpeg path from environment or system PATH"""
+    ffmpeg_path = os.getenv('FFMPEG_PATH', 'ffmpeg')
+    
+    if shutil.which(ffmpeg_path):
+        return ffmpeg_path
+    else:
+        raise FileNotFoundError("FFmpeg not found in system")
+
+def convert_to_wav(src_path: str, dst_path: str, sample_rate: int = 16000, channels: int = 1) -> bool:
+    """
+    Convert audio to WAV with specified parameters
+    
+    Args:
+        src_path: source file
+        dst_path: destination WAV file  
+        sample_rate: sample rate (default 16kHz)
+        channels: number of channels (default 1 - mono)
+        
+    Returns:
+        bool: conversion success
+    """
+    try:
+        ffmpeg_path = get_ffmpeg_path()
+        
+        cmd = [
+            ffmpeg_path,
+            '-i', src_path,
+            '-ar', str(sample_rate),
+            '-ac', str(channels),
+            '-acodec', 'pcm_s16le',
+            '-y',  # overwrite without confirmation
+            dst_path
+        ]
+        
+        logger.info(f"Converting: {src_path} -> {dst_path} ({sample_rate}Hz, {channels}ch)")
+        
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=300
+        )
+        
+        if result.returncode == 0:
+            logger.info(f"Conversion successful: {dst_path}")
+            return True
+        else:
+            logger.error(f"Conversion error: {result.stderr}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"convert_to_wav error: {e}")
+        return False
