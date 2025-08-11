@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 from youtube_processor import YouTubeProcessor
 from file_processor import FileProcessor
 from audio_processor import AudioProcessor
+from smart_summarizer import SmartSummarizer
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -90,6 +91,10 @@ class SimpleTelegramBot:
         # Инициализация аудио процессора
         self.audio_processor = AudioProcessor()
         logger.info("Аудио процессор инициализирован")
+        
+        # Инициализация умного суммаризатора
+        self.smart_summarizer = SmartSummarizer(groq_client=self.groq_client)
+        logger.info("Умный суммаризатор инициализирован")
         
         logger.info("Simple Telegram Bot инициализирован")
     
@@ -392,6 +397,11 @@ class SimpleTelegramBot:
 • /30 → сбалансированное сжатие (30%)  
 • /50 → умеренное сжатие (50%)
 
+🧠 **УМНАЯ СУММАРИЗАЦИЯ:**
+• /smart → включить/отключить интеллектуальный анализ
+• Автоматическое определение типа контента
+• Извлечение ключевых инсайтов и структурирование
+
 💬 **ТЕКСТОВЫЕ КОМАНДЫ:**
 • Отправьте: 10%, 30% или 50%
 • Потом отправьте текст для обработки
@@ -408,6 +418,50 @@ class SimpleTelegramBot:
 • Работает на Llama 3.3 70B"""
         
         await self.send_message(chat_id, help_text)
+    
+    async def handle_smart_mode_command(self, update: dict):
+        """Обработка команды /smart - переключение в режим умной суммаризации"""
+        chat_id = update["message"]["chat"]["id"]
+        user_id = update["message"]["from"]["id"]
+        
+        # Устанавливаем флаг умной суммаризации для пользователя
+        if user_id not in self.user_settings:
+            self.user_settings[user_id] = {}
+        
+        # Переключаем режим умной суммаризации
+        current_mode = self.user_settings[user_id].get("smart_mode", False)
+        self.user_settings[user_id]["smart_mode"] = not current_mode
+        new_mode = self.user_settings[user_id]["smart_mode"]
+        
+        if new_mode:
+            mode_text = """🧠 **Умная суммаризация включена!**
+
+Теперь бот будет создавать структурированные резюме с извлечением ключевых инсайтов:
+
+🔍 **Что изменилось:**
+• Автоматическое определение типа контента (встреча, лекция, новости, etc.)
+• Извлечение дат, имён, цифр и ключевых решений
+• Структурированный формат с разделами по важности
+• Выделение критически важных инсайтов
+
+📝 **Поддерживаемые типы:**
+• Встречи → решения, задачи, договорённости
+• Лекции → концепции, выводы, применение  
+• Новости → суть, участники, последствия
+• Обсуждения → мнения, согласие, спорные вопросы
+
+Отправьте любой текст, документ, аудио или ссылку для умной обработки!
+
+_Чтобы вернуться к обычной суммаризации, снова нажмите /smart_"""
+        else:
+            mode_text = """📝 **Обычная суммаризация восстановлена**
+
+Теперь бот использует стандартный режим суммаризации с настраиваемыми уровнями сжатия (10%, 30%, 50%).
+
+Чтобы снова включить умную суммаризацию, нажмите /smart"""
+
+        await self.send_message(chat_id, mode_text)
+        logger.info(f"Пользователь {user_id} {'включил' if new_mode else 'отключил'} умную суммаризацию")
     
     async def handle_stats_command(self, update: dict):
         """Обработка команды /stats"""
@@ -1084,8 +1138,23 @@ class SimpleTelegramBot:
                 # Получаем уровень сжатия пользователя
                 compression_ratio = self.get_user_compression_level(user_id)
                 
-                # Суммаризируем транскрибированный текст
-                summary = await self.summarize_audio_content(transcribed_text, file_name, duration, compression_ratio)
+                # Проверяем, включена ли умная суммаризация
+                smart_mode = self.user_settings.get(user_id, {}).get("smart_mode", False)
+                
+                if smart_mode and self.smart_summarizer:
+                    # Умная суммаризация аудио
+                    target_ratio = compression_ratio / 100.0
+                    smart_result = await self.smart_summarizer.smart_summarize(
+                        transcribed_text, source_type="audio", 
+                        source_name=file_name, 
+                        compression_ratio=target_ratio
+                    )
+                    summary = self.smart_summarizer.format_smart_response(
+                        smart_result, f"аудио: {file_name}", len(transcribed_text)
+                    )
+                else:
+                    # Обычная суммаризация аудио
+                    summary = await self.summarize_audio_content(transcribed_text, file_name, duration, compression_ratio)
                 
                 if summary:
                     # Формируем итоговый ответ
@@ -1387,6 +1456,8 @@ class SimpleTelegramBot:
                             await self.handle_help_command(update)
                         elif text == "/stats":
                             await self.handle_stats_command(update)
+                        elif text == "/smart":
+                            await self.handle_smart_mode_command(update)
 
                         elif text in ["/10"]:
                             await self.handle_compression_command(update, 10)
@@ -1486,12 +1557,27 @@ class SimpleTelegramBot:
                                 
                                 start_time = time.time()
                                 
-                                # Получаем уровень сжатия пользователя из базы данных
-                                user_compression_level = self.get_user_compression_level(user_id)
-                                target_ratio = user_compression_level / 100.0
+                                # Проверяем, включена ли умная суммаризация
+                                smart_mode = self.user_settings.get(user_id, {}).get("smart_mode", False)
                                 
-                                # Выполняем суммаризацию с пользовательскими настройками
-                                summary = await self.summarize_text(text, target_ratio=target_ratio)
+                                if smart_mode and self.smart_summarizer:
+                                    # Умная суммаризация
+                                    user_compression_level = self.get_user_compression_level(user_id)
+                                    target_ratio = user_compression_level / 100.0
+                                    
+                                    smart_result = await self.smart_summarizer.smart_summarize(
+                                        text, source_type="text", 
+                                        source_name="текстовое сообщение", 
+                                        compression_ratio=target_ratio
+                                    )
+                                    summary = self.smart_summarizer.format_smart_response(
+                                        smart_result, "текстовое сообщение", len(text), processing_time
+                                    )
+                                else:
+                                    # Обычная суммаризация
+                                    user_compression_level = self.get_user_compression_level(user_id)
+                                    target_ratio = user_compression_level / 100.0
+                                    summary = await self.summarize_text(text, target_ratio=target_ratio)
                                 
                                 processing_time = time.time() - start_time
                                 
@@ -1683,7 +1769,10 @@ class SimpleTelegramBot:
                     "command": "stats", 
                     "description": "📊 Статистика использования"
                 },
-
+                {
+                    "command": "smart",
+                    "description": "🧠 Умная суммаризация с анализом"
+                },
                 {
                     "command": "10",
                     "description": "🔥 Максимальное сжатие (10%)"
