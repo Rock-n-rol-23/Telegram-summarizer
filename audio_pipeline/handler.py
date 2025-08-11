@@ -14,7 +14,7 @@ from .downloader import TelegramAudioDownloader
 from .transcriber_adapter import transcribe_with_whisper, check_whisper_installation
 from .segmenter import AudioSegmenter
 from .summarization_adapter import run_summarization_with_bot_instance, prepare_audio_summary_response, validate_summarization_input
-from utils.ffmpeg import to_wav_16k_mono, extract_audio, get_audio_duration, check_ffmpeg_available
+from utils.ffmpeg import to_wav_16k_mono, extract_audio_from_video, get_audio_info, check_ffmpeg
 
 logger = logging.getLogger(__name__)
 

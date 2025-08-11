@@ -89,6 +89,7 @@ class SimpleTelegramBot:
         # Инициализация аудио процессора
         try:
             from audio_pipeline.handler import AudioHandler
+            from audio_pipeline.new_handler import handle_voice, handle_audio, handle_video_note
             from config import Config
             config = Config()
             audio_config = {
@@ -1997,32 +1998,52 @@ class SimpleTelegramBot:
             return None
 
     async def handle_voice_message(self, update: dict):
-        """Обработка голосовых сообщений"""
-        if not self.audio_handler:
-            chat_id = update["message"]["chat"]["id"]
-            await self.send_message(chat_id, "❌ Обработка аудио временно недоступна\n\nПопробуйте позже.")
-            return
-        
+        """Обработка голосовых сообщений (используем новый хендлер)"""
         try:
-            success = await self.audio_handler.handle_voice(update, None, self)
-            if not success:
-                logger.warning("Аудио обработчик не смог обработать голосовое сообщение")
+            from audio_pipeline.new_handler import handle_voice
+            # Создаем фальшивый context для совместимости
+            class FakeContext:
+                def __init__(self, bot):
+                    self.bot = bot
+            
+            fake_context = FakeContext(self)
+            
+            # Конвертируем dict в объект для совместимости
+            class FakeUpdate:
+                def __init__(self, update_dict):
+                    self.message = type('obj', (object,), update_dict["message"])()
+                    for key, value in update_dict["message"].items():
+                        setattr(self.message, key, value)
+            
+            fake_update = FakeUpdate(update)
+            await handle_voice(fake_update, fake_context)
+            
         except Exception as e:
             logger.error(f"Ошибка при обработке голосового сообщения: {e}")
             chat_id = update["message"]["chat"]["id"]
             await self.send_message(chat_id, "❌ Ошибка при обработке голосового сообщения")
 
     async def handle_audio_message(self, update: dict):
-        """Обработка аудиофайлов"""
-        if not self.audio_handler:
-            chat_id = update["message"]["chat"]["id"]
-            await self.send_message(chat_id, "❌ Обработка аудио временно недоступна\n\nПопробуйте позже.")
-            return
-        
+        """Обработка аудиофайлов (используем новый хендлер)"""
         try:
-            success = await self.audio_handler.handle_audio(update, None, self)
-            if not success:
-                logger.warning("Аудио обработчик не смог обработать аудиофайл")
+            from audio_pipeline.new_handler import handle_audio
+            # Создаем фальшивый context для совместимости
+            class FakeContext:
+                def __init__(self, bot):
+                    self.bot = bot
+            
+            fake_context = FakeContext(self)
+            
+            # Конвертируем dict в объект для совместимости
+            class FakeUpdate:
+                def __init__(self, update_dict):
+                    self.message = type('obj', (object,), update_dict["message"])()
+                    for key, value in update_dict["message"].items():
+                        setattr(self.message, key, value)
+            
+            fake_update = FakeUpdate(update)
+            await handle_audio(fake_update, fake_context)
+            
         except Exception as e:
             logger.error(f"Ошибка при обработке аудиофайла: {e}")
             chat_id = update["message"]["chat"]["id"]
