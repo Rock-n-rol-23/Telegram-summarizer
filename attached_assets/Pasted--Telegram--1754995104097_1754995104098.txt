@@ -1,0 +1,278 @@
+Ты — инженер, дорабатывающий мой Telegram-бот. Репозиторий уже открыт в среде. Нужно реализовать суммаризацию аудио, принимая как пересланные голосовые/аудио, так и загруженные пользователем файлы. Используй Python 3.11+. В проекте уже есть зависимости и заготовки, но часть кода аудио обрезана. Сделай шаги ниже в точности.
+Цели
+1. Поддержать источники Telegram:
+    * message.voice (голосовые, OGG/Opus)
+    * message.audio (музыка/аудио, MP3/FLAC/WAV/…)
+    * message.document (если это аудиофайл, например M4A/MP3/WAV/OGG/WEBM/FLAC, и даже application/octet-stream с аудио-расширением)
+2. Скачать файл через Bot API getFile, без блокировки (используй aiohttp).
+3. Нормализовать аудио в WAV 16kHz mono через ffmpeg (получай бинарь программно через imageio-ffmpeg, без системной установки).
+4. Если длительность/размер велик — резать на куски по ~10 минут или по размеру ~24 МБ (что наступит раньше), транскрибировать каждый кусок, объединять текст.
+5. Транскрыбировать через Groq Whisper (whisper-large-v3) с Python SDK groq. Ключ — GROQ_API_KEY из .env.
+6. Прогонять результат через существующий summarizer (если SmartSummarizer доступен), иначе fallback: сгенерируй краткое саммари через LLM модель Groq (llama-3.1-70b-versatile) с инструкцией «коротко, по пунктам».
+7. Отправить пользователю ответ (markdown), показать: «Длительность/размер», «распознанный язык» (если доступно), и саммари.
+8. Удалять временные файлы в любом исходе.
+Обнови зависимости
+В файле pyproject.toml добавь/убедиcь, что есть:
+[project]
+dependencies = [
+  "pydub>=0.25.1",
+  "imageio-ffmpeg>=0.4.9",
+  # уже есть:
+  "aiohttp>=3.12.14",
+  "python-telegram-bot>=22.2",
+  "groq>=0.30.0",
+  # остальное оставить как есть
+]
+Далее выполните установку зависимостей в среде.
+Создай/перепиши утилиту для FFmpeg
+Создай файл utils/ffmpeg.py (перепиши, если есть обрезанная версия):
+# utils/ffmpeg.py
+import os
+from imageio_ffmpeg import get_ffmpeg_exe
+
+_FFMPEG_PATH = None
+
+def ensure_ffmpeg() -> str:
+    global _FFMPEG_PATH
+    if _FFMPEG_PATH and os.path.exists(_FFMPEG_PATH):
+        return _FFMPEG_PATH
+    path = get_ffmpeg_exe()
+    _FFMPEG_PATH = path
+    return path
+Полностью перепиши audio_processor.py
+Сделай модуль без «…», со следующей логикой:
+# audio_processor.py
+import os
+import io
+import tempfile
+import logging
+import asyncio
+import aiohttp
+import aiofiles
+import math
+import subprocess
+from typing import Dict, Any, Optional, List, Tuple
+from pydub import AudioSegment
+from groq import Groq
+from utils.ffmpeg import ensure_ffmpeg
+
+logger = logging.getLogger(__name__)
+
+SUPPORTED_EXTS = {".ogg", ".oga", ".mp3", ".m4a", ".wav", ".flac", ".webm", ".aac"}
+
+class AudioProcessor:
+    def __init__(self, groq_client: Groq, max_file_size_mb: int = 50):
+        self.groq = groq_client
+        self.max_mb = max_file_size_mb
+
+    async def download_telegram_file(self, file_url: str, dst_path: str) -> None:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
+            async with session.get(file_url) as resp:
+                resp.raise_for_status()
+                async with aiofiles.open(dst_path, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(8192):
+                        await f.write(chunk)
+
+    def _convert_to_wav16k_mono(self, src_path: str, dst_path: str) -> Tuple[float, int]:
+        """Конвертация через ffmpeg + возврат (длительность_сек, битрейт_Гц)."""
+        ffmpeg = ensure_ffmpeg()
+        cmd = [
+            ffmpeg, "-y", "-i", src_path,
+            "-ac", "1", "-ar", "16000",  # mono 16kHz
+            "-vn", dst_path
+        ]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        audio = AudioSegment.from_wav(dst_path)
+        duration = len(audio) / 1000.0
+        return duration, 16000
+
+    def _split_wav(self, wav_path: str, chunk_secs: int = 600) -> List[str]:
+        """Режем на куски по chunk_secs секунд, возвращаем пути к кускам."""
+        audio = AudioSegment.from_wav(wav_path)
+        chunks = []
+        for i in range(0, len(audio), chunk_secs * 1000):
+            chunk = audio[i:i + chunk_secs * 1000]
+            out_path = wav_path.replace(".wav", f".part{i//1000:04d}.wav")
+            chunk.export(out_path, format="wav", parameters=["-ac", "1", "-ar", "16000"])
+            chunks.append(out_path)
+        return chunks
+
+    async def transcribe_wav(self, wav_path: str) -> str:
+        """Транскрипция одним вызовом Groq Whisper для одного файла."""
+        with open(wav_path, "rb") as f:
+            res = self.groq.audio.transcriptions.create(
+                file=("audio.wav", f, "audio/wav"),
+                model="whisper-large-v3",
+                response_format="verbose_json",
+                temperature=0.0
+            )
+        # res.text содержит текст, res.language — язык, если verbose_json
+        text = getattr(res, "text", "") or ""
+        return text.strip()
+
+    async def process_audio_from_telegram(self, file_url: str, filename_hint: str) -> Dict[str, Any]:
+        if not filename_hint:
+            filename_hint = "audio.ogg"
+        _, ext = os.path.splitext(filename_hint.lower())
+        if ext not in SUPPORTED_EXTS:
+            return {"success": False, "error": f"Неподдерживаемый формат: {ext}. Поддерживаемые: {', '.join(sorted(SUPPORTED_EXTS))}"}
+
+        tmp_dir = tempfile.mkdtemp(prefix="tg_audio_")
+        original_path = os.path.join(tmp_dir, f"orig{ext or '.bin'}")
+        wav_path = os.path.join(tmp_dir, "audio.wav")
+
+        try:
+            await self.download_telegram_file(file_url, original_path)
+
+            size_mb = os.path.getsize(original_path) / (1024 * 1024)
+            if size_mb > self.max_mb:
+                return {"success": False, "error": f"Аудио слишком большое ({size_mb:.1f}MB), лимит {self.max_mb}MB"}
+
+            # Конвертируем в WAV 16kHz mono
+            duration, _ = self._convert_to_wav16k_mono(original_path, wav_path)
+
+            # Если длительное — режем и транскрибируем по кускам
+            chunk_paths = self._split_wav(wav_path, chunk_secs=600) if duration > 620 else [wav_path]
+
+            parts = []
+            for cp in chunk_paths:
+                text = await self.transcribe_wav(cp)
+                if text:
+                    parts.append(text)
+
+            if not parts:
+                return {"success": False, "error": "Не удалось распознать речь."}
+
+            transcript = "\n".join(parts)
+            return {
+                "success": True,
+                "transcript": transcript,
+                "duration_sec": duration,
+                "tmp_dir": tmp_dir
+            }
+        except Exception as e:
+            logger.exception("Ошибка обработки аудио")
+            return {"success": False, "error": f"Ошибка обработки аудио: {e}"}
+Допиши/исправь обработчики в simple_bot.py
+1. В конструкторе бота инициализируй AudioProcessor:
+from audio_processor import AudioProcessor
+# ...
+self.audio_processor = AudioProcessor(groq_client=self.groq_client)
+1. Добавь общий helper получения file_url по file_id:
+async def _get_file_url(self, file_id: str) -> str:
+    # self.bot — инстанс PTB application.bot
+    f = await self.bot.get_file(file_id)
+    # telegram file URL доступен как f.file_path через API telegram
+    return f.file_path  # PTB 22.x уже возвращает https URL
+1. Зарегистрируй хендлеры (voice, audio, document): В setup/registration добавь:
+app.add_handler(MessageHandler(filters.VOICE, self.on_voice))
+app.add_handler(MessageHandler(filters.AUDIO, self.on_audio))
+app.add_handler(MessageHandler(filters.Document.MimeType("audio/") | filters.Document.FileExtension(["ogg","oga","mp3","m4a","wav","flac","webm","aac"]), self.on_audio_document))
+1. Реализуй методы:
+async def on_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    voice = update.message.voice
+    file_id = voice.file_id
+    file_url = await self._get_file_url(file_id)
+    await self._handle_audio(update, file_url, filename_hint="voice.ogg")
+
+async def on_audio(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    audio = update.message.audio
+    file_id = audio.file_id
+    name = (audio.file_name or "audio.mp3")
+    file_url = await self._get_file_url(file_id)
+    await self._handle_audio(update, file_url, filename_hint=name)
+
+async def on_audio_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    doc = update.message.document
+    file_id = doc.file_id
+    name = doc.file_name or "audio.bin"
+    file_url = await self._get_file_url(file_id)
+    await self._handle_audio(update, file_url, filename_hint=name)
+
+async def _handle_audio(self, update: Update, file_url: str, filename_hint: str):
+    chat_id = update.message.chat_id
+    msg = await update.message.reply_text("🎧 Обрабатываю аудио… конвертирую и распознаю речь…")
+    try:
+        result = await self.audio_processor.process_audio_from_telegram(file_url, filename_hint)
+        if not result.get("success"):
+            await msg.edit_text(f"❌ {result.get('error')}")
+            return
+
+        transcript = result["transcript"]
+        duration = result.get("duration_sec")
+
+        # Попробуем твой SmartSummarizer, если он есть, иначе фоллбек
+        summary = None
+        if hasattr(self, "smart_summarizer") and self.smart_summarizer:
+            summary = await self.smart_summarizer.summarize_text_async(
+                text=transcript,
+                source_type="audio",
+                max_points=8
+            )
+
+        if not summary:
+            # Фоллбек через LLM Groq — короткое саммари по пунктам
+            prompt = (
+                "Суммируй содержание стенограммы голосового сообщения кратко, по пунктам (5–8 пунктов). "
+                "Сохраняй только факты, действия, решения, даты и цифры.\n\n"
+                f"СТЕНОГРАММА:\n{transcript}"
+            )
+            resp = self.groq_client.chat.completions.create(
+                model="llama-3.1-70b-versatile",
+                temperature=0.2,
+                messages=[{"role":"user","content": prompt}]
+            )
+            summary = resp.choices[0].message.content.strip()
+
+        header = f"🎙️ Аудио распознано ({duration:.0f} сек).\n\n"
+        await msg.edit_text(header + summary, disable_web_page_preview=True)
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка при обработке аудио: {e}")
+Примечание: если у тебя класс SmartSummarizer не имеет summarize_text_async, добавь простой async враппер над синхронным методом, либо просто используй синхронный вызов в asyncio.to_thread.
+Подчиcть и добей SmartSummarizer (если в файле есть «…»)
+В smart_summarizer.py убери обрезки ... и допиши метод (или добавь упрощённый), например:
+# в SmartSummarizer
+async def summarize_text_async(self, text: str, source_type: str = "audio", max_points: int = 8) -> str:
+    return await asyncio.to_thread(self.summarize_text, text, source_type, max_points)
+
+def summarize_text(self, text: str, source_type: str = "audio", max_points: int = 8) -> str:
+    # если хочешь — тут твоя логика; иначе сделай прокси в LLM:
+    prompt = (
+        f"Суммируй {source_type} стенограмму кратко, по пунктам (до {max_points}). "
+        "Сфокусируйся на ключевых решениях, задачах, сроках, цифрах.\n\n"
+        f"Текст:\n{text}"
+    )
+    resp = self.groq_client.chat.completions.create(
+        model="llama-3.1-70b-versatile",
+        temperature=0.2,
+        messages=[{"role":"user","content": prompt}]
+    )
+    return resp.choices[0].message.content.strip()
+Инициализация в конструкторе бота
+Убедись, что где инициализируется Groq client, там же создается SmartSummarizer и AudioProcessor:
+from groq import Groq
+from smart_summarizer import SmartSummarizer
+from audio_processor import AudioProcessor
+
+self.groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+self.smart_summarizer = SmartSummarizer(groq_client=self.groq_client)
+self.audio_processor = AudioProcessor(groq_client=self.groq_client)
+ENV
+В .env уже должен быть:
+GROQ_API_KEY=...
+Если нет — добавь.
+UX и сообщения об ошибках
+* Если формат не поддерживается — отвечай: список поддерживаемых.
+* Если файл больше лимита — сообщи реальный размер и лимит.
+* Если распознать не удалось — верни понятное «Не удалось распознать речь».
+Тесты (быстрые ручные)
+1. Отправь боту voice (OGG/Opus) — должен прийти текст и саммари.
+2. Отправь audio.mp3 (музыка/диктофон) — то же.
+3. Отправь document с m4a/wav/flac — то же.
+4. Проверь длинный файл (более 10 мин) — посмотри, что он режется и суммируется.
+5. Проверь сообщения об ошибках: отправь файл > лимита, либо не-аудио.
+Важно
+* Не трогай остальную логику бота.
+* Следи, чтобы все временные файлы/директории удалялись только после отправки ответа (можешь чистить внутри AudioProcessor после завершения).
+* Не добавляй блокирующие I/O в async-код без to_thread().
+Сделай все правки, запусти приложение, и сообщи в консоль логах, что аудио-функциональность активна: logger.info("Audio summarization is enabled").
