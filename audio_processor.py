@@ -101,7 +101,11 @@ class AudioProcessor:
     
     def convert_to_wav(self, input_path: str, output_path: str) -> Dict[str, Any]:
         """Конвертирует аудио в формат WAV для обработки"""
+        logger.info(f"DEBUG: convert_to_wav вызван с input_path={input_path}, output_path={output_path}")
+        logger.info(f"DEBUG: self.ffmpeg_available = {self.ffmpeg_available}")
+        
         if not self.ffmpeg_available:
+            logger.error("DEBUG: FFmpeg недоступен - проверка не прошла")
             return {
                 'success': False,
                 'error': 'FFmpeg недоступен для конвертации аудио'
@@ -176,6 +180,7 @@ class AudioProcessor:
         """Транскрибирует аудио в текст используя SpeechRecognition"""
         try:
             logger.info(f"🎤 Начинаю транскрипцию аудио: {file_path}")
+            logger.info(f"DEBUG: transcribe_audio - FFmpeg доступен: {self.ffmpeg_available}")
             
             # Получаем длительность аудио
             duration = self.get_audio_duration(file_path)
