@@ -7,19 +7,23 @@ import subprocess
 import shutil
 from typing import Dict, Any, Optional
 import speech_recognition as sr
+from groq import Groq
 
 logger = logging.getLogger(__name__)
 
 class AudioProcessor:
     """Класс для обработки аудио файлов и транскрипции речи в текст"""
     
-    def __init__(self):
+    def __init__(self, groq_client: Optional[Groq] = None):
         self.supported_extensions = ['.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac', '.opus', '.wma']
         self.max_file_size = 50 * 1024 * 1024  # 50MB для аудио
         self.max_duration = 3600  # Максимум 1 час
         
         # Инициализируем распознаватель речи
         self.recognizer = sr.Recognizer()
+        
+        # Groq клиент для транскрипции
+        self.groq_client = groq_client
         
         # Проверяем наличие ffmpeg
         self.ffmpeg_available = self._check_ffmpeg()
@@ -204,10 +208,16 @@ class AudioProcessor:
                 audio = self.recognizer.record(source)
             
             # Пробуем несколько методов распознавания
-            transcription_methods = [
+            transcription_methods = []
+            
+            # Groq Whisper - приоритетный метод если доступен
+            if self.groq_client:
+                transcription_methods.append(('Groq Whisper API', lambda audio: self._transcribe_with_groq_whisper(wav_path)))
+            
+            transcription_methods.extend([
                 ('Google Speech Recognition', self._transcribe_with_google),
                 ('Sphinx (offline)', self._transcribe_with_sphinx),
-            ]
+            ])
             
             for method_name, method_func in transcription_methods:
                 try:
@@ -252,6 +262,21 @@ class AudioProcessor:
     def _transcribe_with_sphinx(self, audio) -> str:
         """Транскрипция через CMU Sphinx (офлайн, бесплатно)"""
         return self.recognizer.recognize_sphinx(audio)
+    
+    def _transcribe_with_groq_whisper(self, audio_file_path: str) -> str:
+        """Транскрипция через Groq Whisper API"""
+        try:
+            with open(audio_file_path, 'rb') as file:
+                transcription = self.groq_client.audio.transcriptions.create(
+                    file=(os.path.basename(audio_file_path), file.read()),
+                    model="whisper-large-v3",
+                    language="ru",
+                    response_format="text"
+                )
+                return transcription
+        except Exception as e:
+            logger.error(f"Groq Whisper транскрипция не удалась: {e}")
+            raise e
     
     def cleanup_temp_file(self, temp_dir: str):
         """Очищает временные файлы"""
