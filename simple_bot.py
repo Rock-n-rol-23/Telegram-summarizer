@@ -89,7 +89,7 @@ class SimpleTelegramBot:
         logger.info("Файловый процессор инициализирован")
         
         # Инициализация аудио процессора
-        self.audio_processor = AudioProcessor()
+        self.audio_processor = AudioProcessor(groq_client=self.groq_client)
         logger.info("Аудио процессор инициализирован")
         
         # Инициализация умного суммаризатора
