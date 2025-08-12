@@ -29,9 +29,19 @@ class AudioProcessor:
     def _check_ffmpeg(self) -> bool:
         """Проверяет наличие ffmpeg в системе"""
         try:
-            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
+            # Сначала пробуем найти ffmpeg через which
+            ffmpeg_path = shutil.which('ffmpeg')
+            if ffmpeg_path:
+                subprocess.run([ffmpeg_path, '-version'], capture_output=True, check=True)
+                logger.info(f"FFmpeg найден: {ffmpeg_path}")
+                return True
+            else:
+                # Пробуем прямо вызвать ffmpeg
+                subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+                logger.info("FFmpeg найден в PATH")
+                return True
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logger.warning(f"FFmpeg не найден: {e}")
             return False
     
     async def download_telegram_audio(self, file_info: Dict[str, Any], file_name: str, file_size: int) -> Dict[str, Any]:
@@ -96,9 +106,12 @@ class AudioProcessor:
         try:
             logger.info(f"🎵 Конвертация аудио: {input_path} -> {output_path}")
             
+            # Получаем путь к ffmpeg
+            ffmpeg_path = shutil.which('ffmpeg') or 'ffmpeg'
+            
             # Команда ffmpeg для конвертации в WAV с настройками для речи
             cmd = [
-                'ffmpeg', '-i', input_path,
+                ffmpeg_path, '-i', input_path,
                 '-ar', '16000',  # 16kHz sample rate (хорошо для речи)
                 '-ac', '1',      # Моно
                 '-c:a', 'pcm_s16le',  # 16-bit PCM
@@ -134,8 +147,11 @@ class AudioProcessor:
             return 0.0
         
         try:
+            # Получаем путь к ffprobe
+            ffprobe_path = shutil.which('ffprobe') or 'ffprobe'
+            
             cmd = [
-                'ffprobe', '-v', 'quiet', '-show_entries', 
+                ffprobe_path, '-v', 'quiet', '-show_entries', 
                 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1',
                 file_path
             ]
