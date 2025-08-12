@@ -1109,7 +1109,9 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     await self.edit_message(chat_id, processing_message_id, f"🎵 Обрабатываю аудио: {file_name}\n\n🎤 Распознаю речь...")
                 
                 # Транскрибируем аудио в текст
-                transcription_result = self.audio_processor.transcribe_audio(download_result["file_path"])
+                import asyncio
+                loop = asyncio.get_event_loop()
+                transcription_result = await loop.run_in_executor(None, self.audio_processor.transcribe_audio, download_result["file_path"])
                 
                 # Очищаем временные файлы
                 self.audio_processor.cleanup_temp_file(download_result["temp_dir"])
