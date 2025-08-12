@@ -19,7 +19,7 @@ The application follows a modular Python architecture with clear separation of c
 ### Key Components & Features
 - **Bot Layer**: Handles Telegram interactions, command processing, and message routing using `python-telegram-bot`.
 - **AI Service Layer**: Performs text summarization.
-    - **Primary Backend**: Groq API (Llama 3.3 70B).
+    - **Primary Backend**: Groq API (Llama 3.3 70B Versatile).
     - **Smart Summarization**: Advanced AI analysis with content type detection, key insight extraction, and structured output formatting.
     - **Fallback Backend**: Local Hugging Face Transformers model (GPT-2 based) for API unavailability.
 - **Data Layer**: Manages data persistence using SQLite (or Railway PostgreSQL for production). Stores user settings, request history, usage statistics, and detailed change logs.
@@ -48,7 +48,7 @@ The application follows a modular Python architecture with clear separation of c
 ## External Dependencies
 
 ### APIs
-- **Groq API**: Primary summarization service, utilizing the Llama 3.1 70B model.
+- **Groq API**: Primary summarization service, utilizing the Llama 3.3 70B Versatile model.
 - **Telegram Bot API**: For all bot interactions and message handling.
 
 ### Python Libraries
