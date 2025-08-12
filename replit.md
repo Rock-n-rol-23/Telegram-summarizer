@@ -28,8 +28,8 @@ The application follows a modular Python architecture with clear separation of c
 - **Smart Analysis Features**: 
     - **Content Type Detection**: Automatically identifies meeting notes, lectures, news, interviews, presentations, discussions, instructions, and reviews.
     - **Entity Extraction**: Finds and highlights dates, numbers, names, actions, and decisions.
-    - **Structured Output**: Formats summaries with specialized templates based on content type.
-    - **Key Insights**: Extracts critical information, facts, and conclusions beyond simple text compression.
+    - **Key Insights Only**: Focused output with only critical information, facts, and conclusions.
+    - **Compression-Aware Analysis**: Adjusts insight count based on compression level (10%=2 insights, 30%=3 insights, 50%=4 insights).
 - **Web Page Summarization**: Automatically detects URLs, extracts content using BeautifulSoup and `python-readability`, and summarizes. Supports up to 3 URLs per message and includes domain filtering.
 - **Document Summarization**: Supports uploading and summarizing PDF, DOCX, DOC, and TXT files (up to 20MB). Uses libraries like PyPDF2, pdfplumber, python-docx, mammoth, and chardet for text extraction.
 - **YouTube Video Summarization**: Detects YouTube URLs, extracts transcripts using `yt-dlp`, and summarizes video content. Supports videos up to 2 hours.

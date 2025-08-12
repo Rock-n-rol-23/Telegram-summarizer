@@ -110,30 +110,8 @@ class SmartSummarizer:
             # Извлекаем ключевые сущности
             entities = self.extract_key_entities(text)
             
-            # Создаем специализированный промпт в зависимости от типа контента
-            summary_prompt = self._create_specialized_prompt(text, content_type, entities, compression_ratio)
-            
-            # Получаем суммаризацию от Groq
-            response = self.groq_client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "Ты эксперт-аналитик, который создает структурированные, информативные резюме. Твоя задача - извлечь самую важную информацию и представить её в логической структуре."
-                    },
-                    {
-                        "role": "user",
-                        "content": summary_prompt
-                    }
-                ],
-                model="llama-3.3-70b-versatile",
-                max_tokens=1000,
-                temperature=0.2
-            )
-            
-            smart_summary = response.choices[0].message.content.strip() if response.choices[0].message.content else "Нет содержимого"
-            
-            # Создаем дополнительный анализ ключевых инсайтов
-            insights_prompt = self._create_insights_prompt(text, entities)
+            # Создаем анализ ключевых инсайтов с учетом уровня сжатия
+            insights_prompt = self._create_insights_prompt(text, entities, compression_ratio)
             
             insights_response = self.groq_client.chat.completions.create(
                 messages=[
@@ -155,7 +133,6 @@ class SmartSummarizer:
             
             return {
                 "content_type": content_type,
-                "smart_summary": smart_summary,
                 "key_insights": key_insights,
                 "entities": entities
             }
@@ -164,8 +141,7 @@ class SmartSummarizer:
             logger.error(f"Ошибка умной суммаризации: {e}")
             return {
                 "content_type": "unknown",
-                "smart_summary": f"❌ Ошибка создания умного резюме: {str(e)}",
-                "key_insights": "",
+                "key_insights": f"❌ Ошибка создания умного анализа: {str(e)}",
                 "entities": {}
             }
     
@@ -247,8 +223,8 @@ class SmartSummarizer:
         
         return prompt
     
-    def _create_insights_prompt(self, text: str, entities: Dict) -> str:
-        """Создает промпт для извлечения ключевых инсайтов"""
+    def _create_insights_prompt(self, text: str, entities: Dict, compression_ratio: float = 0.3) -> str:
+        """Создает промпт для извлечения ключевых инсайтов с учетом уровня сжатия"""
         
         entities_context = ""
         if entities["dates"]:
@@ -258,7 +234,18 @@ class SmartSummarizer:
         if entities["names"]:
             entities_context += f"Упомянутые имена: {', '.join(entities['names'][:3])}\n"
         
-        prompt = f"""Проанализируй следующий текст и выдели ТОЛЬКО самые важные инсайты.
+        # Определяем количество инсайтов в зависимости от уровня сжатия
+        if compression_ratio <= 0.1:  # 10% - максимальное сжатие
+            max_insights = 2
+            detail_level = "самые критически важные"
+        elif compression_ratio <= 0.3:  # 30% - сбалансированное
+            max_insights = 3
+            detail_level = "ключевые"
+        else:  # 50% - подробное
+            max_insights = 4
+            detail_level = "важные"
+        
+        prompt = f"""Проанализируй следующий текст и выдели ТОЛЬКО {detail_level} инсайты.
 
 {entities_context}
 
@@ -267,8 +254,9 @@ class SmartSummarizer:
 • Самый важный факт или вывод
 • Критически важная информация или решение
 • Главное открытие или заключение
+{"• Дополнительный значимый инсайт" if max_insights >= 4 else ""}
 
-Максимум 3 пункта. Каждый пункт должен быть конкретным и значимым.
+Максимум {max_insights} пунктов. Каждый пункт должен быть конкретным и значимым.
 Отвечай на том же языке, что и исходный текст.
 
 ТЕКСТ ДЛЯ АНАЛИЗА:
@@ -294,15 +282,13 @@ class SmartSummarizer:
         
         content_type_display = content_type_names.get(result["content_type"], "текста")
         
-        # Упрощенный формат: только основные выводы и ключевые инсайты
+        # Максимально упрощенный формат: только ключевые инсайты
         response = f"""🧠 **Умное резюме {content_type_display}**
-
-{result["smart_summary"]}
 
 {result["key_insights"]}"""
         
         # Только статистика анализа
-        summary_length = len(result["smart_summary"]) + len(result["key_insights"])
+        summary_length = len(result["key_insights"])
         compression_ratio = summary_length / original_length if original_length > 0 else 0
         
         response += f"""
