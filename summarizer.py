@@ -45,7 +45,7 @@ class TextSummarizer:
         
         # Параметры для суммаризации
         self.groq_params = {
-            "model": "llama-3.1-70b-versatile",
+            "model": "llama-3.3-70b-versatile",
             "temperature": 0.3,
             "max_tokens": 2000,
             "top_p": 0.9,

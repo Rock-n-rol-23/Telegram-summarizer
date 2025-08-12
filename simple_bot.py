@@ -89,12 +89,20 @@ class SimpleTelegramBot:
         logger.info("Файловый процессор инициализирован")
         
         # Инициализация аудио процессора
-        self.audio_processor = AudioProcessor(groq_client=self.groq_client)
-        logger.info("Аудио процессор инициализирован")
+        if self.groq_client:
+            self.audio_processor = AudioProcessor(groq_client=self.groq_client)
+            logger.info("Аудио процессор инициализирован")
+        else:
+            self.audio_processor = None
+            logger.warning("Аудио процессор не инициализирован - отсутствует Groq API key")
         
         # Инициализация умного суммаризатора
-        self.smart_summarizer = SmartSummarizer(groq_client=self.groq_client)
-        logger.info("Умный суммаризатор инициализирован")
+        if self.groq_client:
+            self.smart_summarizer = SmartSummarizer(groq_client=self.groq_client)
+            logger.info("Умный суммаризатор инициализирован")
+        else:
+            self.smart_summarizer = None
+            logger.warning("Умный суммаризатор не инициализирован - отсутствует Groq API key")
         
         logger.info("Simple Telegram Bot инициализирован")
     
@@ -1074,6 +1082,13 @@ _Чтобы вернуться к обычной суммаризации, сн�
         processing_message_id = msg.get("result", {}).get("message_id") if msg and msg.get("ok") else None
         
         try:
+            if not self.audio_processor:
+                if processing_message_id:
+                    await self.edit_message(chat_id, processing_message_id, "❌ Аудио обработка недоступна - нет Groq API ключа")
+                else:
+                    await self.send_message(chat_id, "❌ Аудио обработка недоступна - нет Groq API ключа")
+                return
+            
             result = await self.audio_processor.process_audio_from_telegram(file_url, filename_hint)
             if not result.get("success"):
                 if processing_message_id:
@@ -1116,7 +1131,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 except Exception as e:
                     logger.warning(f"SmartSummarizer не сработал: {e}")
 
-            if not summary:
+            if not summary and self.groq_client:
                 # Фоллбек через LLM Groq — короткое саммари по пунктам
                 prompt = (
                     "Суммируй содержание стенограммы голосового сообщения кратко, по пунктам (5–8 пунктов). "
@@ -1124,11 +1139,14 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     f"СТЕНОГРАММА:\n{transcript}"
                 )
                 resp = self.groq_client.chat.completions.create(
-                    model="llama-3.1-70b-versatile",
+                    model="llama-3.3-70b-versatile",
                     temperature=0.2,
                     messages=[{"role":"user","content": prompt}]
                 )
                 summary = resp.choices[0].message.content.strip()
+            elif not summary:
+                # Если нет API - простая заглушка
+                summary = f"Транскрипция аудио готова ({len(transcript)} символов)"
 
             header = f"🎙️ Аудио распознано ({duration:.0f} сек).\n\n"
             if processing_message_id:
@@ -1138,7 +1156,8 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 
             # Сохраняем в базу данных
             try:
-                self.db.save_user_request(user_id, f"audio:{filename_hint}", len(transcript), len(summary), duration, 'groq_whisper')
+                audio_duration = duration or 0.0  # Убедимся, что duration не None
+                self.db.save_user_request(user_id, f"audio:{filename_hint}", len(transcript), len(summary), float(audio_duration), 'groq_whisper')
             except Exception as save_error:
                 logger.error(f"Ошибка сохранения аудио запроса в БД: {save_error}")
             
