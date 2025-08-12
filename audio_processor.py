@@ -264,18 +264,105 @@ class AudioProcessor:
         return self.recognizer.recognize_sphinx(audio)
     
     def _transcribe_with_groq_whisper(self, audio_file_path: str) -> str:
-        """Транскрипция через Groq Whisper API"""
+        """Транскрипция через Groq Whisper API с разбивкой на части"""
         try:
-            with open(audio_file_path, 'rb') as file:
-                transcription = self.groq_client.audio.transcriptions.create(
-                    file=(os.path.basename(audio_file_path), file.read()),
-                    model="whisper-large-v3",
-                    language="ru",
-                    response_format="text"
-                )
-                return transcription
+            # Проверяем размер файла
+            file_size = os.path.getsize(audio_file_path)
+            max_size = 25 * 1024 * 1024  # 25MB лимит для Groq Whisper
+            
+            if file_size <= max_size:
+                # Если файл небольшой, отправляем как есть
+                with open(audio_file_path, 'rb') as file:
+                    transcription = self.groq_client.audio.transcriptions.create(
+                        file=(os.path.basename(audio_file_path), file.read()),
+                        model="whisper-large-v3",
+                        language="ru",
+                        response_format="text"
+                    )
+                    return transcription
+            else:
+                # Если файл большой, разбиваем на части
+                logger.info(f"🎤 Файл слишком большой ({file_size/1024/1024:.1f}MB), разбиваю на части...")
+                return self._split_and_transcribe_audio(audio_file_path)
+                
         except Exception as e:
             logger.error(f"Groq Whisper транскрипция не удалась: {e}")
+            raise e
+    
+    def _split_and_transcribe_audio(self, audio_file_path: str) -> str:
+        """Разбивает большой аудио файл на части и транскрибирует каждую часть"""
+        try:
+            # Получаем длительность аудио
+            duration = self.get_audio_duration(audio_file_path)
+            if duration <= 0:
+                raise Exception("Не удалось получить длительность аудио")
+            
+            # Разбиваем на части по 10 минут
+            chunk_duration = 600  # 10 минут
+            chunks_count = int(duration / chunk_duration) + 1
+            
+            logger.info(f"🎤 Разбиваю аудио на {chunks_count} частей по {chunk_duration/60:.1f} минут")
+            
+            all_transcriptions = []
+            temp_dir = os.path.dirname(audio_file_path)
+            
+            # Получаем путь к ffmpeg
+            ffmpeg_path = shutil.which('ffmpeg') or 'ffmpeg'
+            
+            for i in range(chunks_count):
+                start_time = i * chunk_duration
+                chunk_file = os.path.join(temp_dir, f"chunk_{i}.wav")
+                
+                try:
+                    # Вырезаем часть аудио
+                    cmd = [
+                        ffmpeg_path, '-i', audio_file_path,
+                        '-ss', str(start_time),
+                        '-t', str(chunk_duration),
+                        '-ar', '16000',
+                        '-ac', '1',
+                        '-c:a', 'pcm_s16le',
+                        '-y',
+                        chunk_file
+                    ]
+                    
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    if result.returncode != 0:
+                        logger.warning(f"🎤 Не удалось создать часть {i}: {result.stderr}")
+                        continue
+                    
+                    # Транскрибируем часть
+                    with open(chunk_file, 'rb') as file:
+                        transcription = self.groq_client.audio.transcriptions.create(
+                            file=(f"chunk_{i}.wav", file.read()),
+                            model="whisper-large-v3",
+                            language="ru",
+                            response_format="text"
+                        )
+                        if transcription and transcription.strip():
+                            all_transcriptions.append(transcription.strip())
+                            logger.info(f"🎤 Часть {i+1}/{chunks_count} транскрибирована: {len(transcription)} символов")
+                    
+                    # Удаляем временный файл части
+                    if os.path.exists(chunk_file):
+                        os.remove(chunk_file)
+                        
+                except Exception as e:
+                    logger.warning(f"🎤 Ошибка обработки части {i}: {e}")
+                    # Удаляем временный файл при ошибке
+                    if os.path.exists(chunk_file):
+                        os.remove(chunk_file)
+                    continue
+            
+            if all_transcriptions:
+                full_text = " ".join(all_transcriptions)
+                logger.info(f"🎤 Полная транскрипция готова: {len(full_text)} символов из {len(all_transcriptions)} частей")
+                return full_text
+            else:
+                raise Exception("Не удалось транскрибировать ни одну часть аудио")
+                
+        except Exception as e:
+            logger.error(f"🎤 Ошибка разбивки и транскрипции: {e}")
             raise e
     
     def cleanup_temp_file(self, temp_dir: str):
