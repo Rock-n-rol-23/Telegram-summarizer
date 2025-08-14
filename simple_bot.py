@@ -1355,10 +1355,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         logger.info(f"Получено пересланное сообщение от пользователя {user_id}: '{text[:50]}...'")
                     else:
                         logger.info(f"Получено сообщение от пользователя {user_id}: '{text[:50]}...'")
-                elif "forward_from" in message or "forward_from_chat" in message or "forward_origin" in message:
-                    # Пересланное сообщение без текста - просто игнорируем без ошибки
-                    logger.info(f"Получено пересланное медиа сообщение без текста от пользователя {user_id} - игнорируем")
-                    return
+
                 
                 if text:
                     logger.info(f"DEBUG: Текст получен для обработки: '{text}'")
@@ -1543,6 +1540,8 @@ _Чтобы вернуться к обычной суммаризации, сн�
                                 self.processing_users.discard(user_id)
                 elif "audio" in message or "voice" in message:
                     # Обработка аудио файлов и голосовых сообщений
+                    if ("forward_from" in message) or ("forward_from_chat" in message) or ("forward_origin" in message):
+                        logger.info("Пересланное аудио/voice без текста — направляю в handle_audio_message")
                     await self.handle_audio_message(update)
                     return
                 elif "document" in message:
@@ -1556,7 +1555,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         "audio/mpeg", "audio/mp3", "audio/wav", "audio/m4a", 
                         "audio/ogg", "audio/flac", "audio/aac", "audio/opus"
                     ]
-                    audio_extensions = [".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac", ".opus"]
+                    audio_extensions = [".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac", ".opus", ".oga"]
                     
                     is_audio = (
                         mime_type in audio_mime_types or 
@@ -1564,7 +1563,10 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     )
                     
                     if is_audio:
-                        logger.info(f"Документ определен как аудио файл: {file_name}, MIME: {mime_type}")
+                        if ("forward_from" in message) or ("forward_from_chat" in message) or ("forward_origin" in message):
+                            logger.info(f"Пересланный документ распознан как аудио: {file_name}, MIME: {mime_type} — направляю в handle_audio_message")
+                        else:
+                            logger.info(f"Документ определен как аудио файл: {file_name}, MIME: {mime_type}")
                         # Создаем псевдо-аудио объект для совместимости с handle_audio_message
                         audio_message = update.copy()
                         audio_message["message"]["audio"] = document
