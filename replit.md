@@ -44,6 +44,7 @@ The application follows a modular Python architecture with clear separation of c
 - **Modular Python**: Promotes maintainability and scalability.
 - **Simplified UI**: Focuses on core functionality without complex menus, ensuring ease of use.
 - **Comprehensive Input Handling**: Designed to process diverse input types (raw text, URLs, documents, YouTube links) robustly.
+- **Forwarded Media Support**: Bot processes forwarded audio/voice messages and audio documents without requiring file downloads to user's device, maintaining backward compatibility with non-audio forwarded media handling.
 
 ## External Dependencies
 
