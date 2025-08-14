@@ -62,6 +62,12 @@ class Config:
         self.DEFAULT_SUMMARY_RATIO = 0.3
         self.DEFAULT_LANGUAGE = 'auto'
         
+        # Настройки для локальной LLM (опционально)
+        self.USE_LOCAL_LLM = os.getenv('USE_LOCAL_LLM', 'false').lower() == 'true'
+        self.LOCAL_LLM_MODEL_PATH = os.getenv('LOCAL_LLM_MODEL_PATH', '')
+        self.LOCAL_LLM_CTX = int(os.getenv('LOCAL_LLM_CTX', '4096'))
+        self.LOCAL_LLM_THREADS = int(os.getenv('LOCAL_LLM_THREADS', '0'))
+        
         # Валидация критически важных параметров
         self._validate_config()
     

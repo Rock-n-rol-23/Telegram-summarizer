@@ -26,6 +26,7 @@ dependencies = [
     "pocketsphinx>=5.0.4",
     "pydub>=0.25.1",
     "imageio-ffmpeg>=0.4.9",
+    "lingua-language-detector==2.0.2",
 ]
 
 [[tool.uv.index]]
