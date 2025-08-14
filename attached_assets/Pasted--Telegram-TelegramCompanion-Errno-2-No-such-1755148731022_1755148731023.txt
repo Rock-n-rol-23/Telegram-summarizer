@@ -1,0 +1,134 @@
+Контекст: у меня Telegram бот в папке TelegramCompanion. Ошибка при обработке аудио: Errno 2 No such file or directory: 'ffmpeg'. Надо починить конвертацию/экспорт аудио и транскрибацию.
+
+Сделай следующие изменения:
+
+1) Настроить pydub на использование встроенного ffmpeg от imageio-ffmpeg
+
+Файл: TelegramCompanion/audio_processor.py
+Правки:
+
+Сразу после импортов добавь инициализацию ffmpeg для pydub:
+
+# --- ADD: make pydub use bundled ffmpeg ---
+from utils.ffmpeg import ensure_ffmpeg
+FFMPEG_BIN = ensure_ffmpeg()
+
+# Проброс для pydub
+from pydub import AudioSegment
+AudioSegment.converter = FFMPEG_BIN
+AudioSegment.ffmpeg = FFMPEG_BIN
+AudioSegment.ffprobe = FFMPEG_BIN  # на случай, если pydub захочет ffprobe
+
+# Чтобы subprocess/другие либы находили бинарь
+import os
+os.environ["FFMPEG_BINARY"] = FFMPEG_BIN
+os.environ["PATH"] = os.path.dirname(FFMPEG_BIN) + os.pathsep + os.environ.get("PATH", "")
+# --- END ADD ---
+
+
+В методе _convert_to_wav16k_mono убедиcь, что используется именно найденный путь:
+
+def _convert_to_wav16k_mono(self, src_path: str, dst_path: str) -> Tuple[float, int]:
+    ffmpeg = FFMPEG_BIN  # вместо строкового 'ffmpeg'
+    cmd = [ffmpeg, "-y", "-i", src_path, "-ac", "1", "-ar", "16000", "-vn", dst_path]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    audio = AudioSegment.from_wav(dst_path)
+    duration = len(audio) / 1000.0
+    return duration, 16000
+
+
+В методе _split_wav оставить экспорт как есть — теперь pydub знает правильный путь к ffmpeg.
+
+Добавь логирование пути для диагностики (один раз при инициализации класса или модуля):
+
+import logging
+logger = logging.getLogger(__name__)
+logger.info(f"Using ffmpeg binary at: {FFMPEG_BIN}")
+
+2) Убедиться, что зависимости есть
+
+Файл: TelegramCompanion/pyproject.toml
+Проверь, что в dependencies присутствуют:
+
+pydub>=0.25.1
+
+imageio-ffmpeg>=0.4.9
+
+Если версий нет — добавь/обнови. Затем выполнить переустановку зависимостей проекта.
+
+3) Починить контейнер для продакшна (Railway/Cloud Run)
+
+Файл: TelegramCompanion/Dockerfile
+Заменить установку пакетов на вариант с ffmpeg (и убрать лишнее):
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Системные зависимости
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    build-essential \
+    curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# Копируем метаданные зависимостей и ставим пакеты
+COPY pyproject.toml .
+RUN pip install --upgrade pip && pip install --no-cache-dir .
+
+# Копируем код
+COPY . .
+
+ENV PORT=5000
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV DEPLOYMENT_TYPE=cloudrun
+
+CMD ["python", "main_entrypoint.py"]
+
+
+Примечание: В .replit у нас уже есть nix.packages = ["ffmpeg", "ffmpeg-full", ...] — это хорошо для dev. Но прод-контейнер всё равно должен устанавливать ffmpeg, поэтому добавили в Dockerfile.
+
+4) Мини-самотест аудио (локально в Replit)
+
+Создай файл TelegramCompanion/dev_audio_selftest.py со скриптом:
+
+import os, tempfile
+from pydub import AudioSegment
+from utils.ffmpeg import ensure_ffmpeg
+from audio_processor import AudioProcessor
+from groq import Groq
+
+print("ffmpeg:", ensure_ffmpeg())
+sine = AudioSegment.silent(duration=1500)  # 1.5 сек тишины
+tmpdir = tempfile.mkdtemp()
+src = os.path.join(tmpdir, "test.ogg")
+wav = os.path.join(tmpdir, "test.wav")
+sine.export(src, format="ogg")  # проверяем экспорт через ffmpeg
+print("OGG written:", os.path.exists(src))
+
+ap = AudioProcessor(groq_client=Groq(api_key=os.getenv("GROQ_API_KEY", "dummy")))
+duration, rate = ap._convert_to_wav16k_mono(src, wav)
+print("WAV:", os.path.exists(wav), "duration:", duration, "rate:", rate)
+
+
+Запусти:
+
+python TelegramCompanion/dev_audio_selftest.py
+
+
+Ожидаем увидеть путь к ffmpeg и успешную запись OGG/WAV.
+
+5) Дополнительная устойчивость и сообщения пользователю
+
+В audio_processor.process_audio_from_telegram в except добавь ветку для FileNotFoundError/subprocess.CalledProcessError с подсказкой «ffmpeg не найден/не запускается».
+
+В simple_bot.py перед обработкой аудио отправляй пользователю короткое сообщение «🎧 Обрабатываю аудио…», а при ошибке — «❌ Ошибка обработки аудио: <текст>».
+
+6) Деплой
+
+Пересобери контейнер и задеплой (Railway/Cloud Run).
+
+Проверь обработку: voice (OGG/Opus), audio (MP3/M4A/WAV), document с аудио — все должны корректно конвертироваться в 16k mono WAV, разбиваться на чанки и отправляться в Groq Whisper.
+
+Конец правок. Применяй, устанавливай зависимости, запускай самотест, затем деплой.

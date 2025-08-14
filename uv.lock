@@ -1240,7 +1240,7 @@ requires-dist = [
     { name = "chardet", specifier = ">=5.2.0" },
     { name = "flask", specifier = ">=3.0.0" },
     { name = "groq", specifier = ">=0.30.0" },
-    { name = "imageio-ffmpeg", specifier = ">=0.6.0" },
+    { name = "imageio-ffmpeg", specifier = ">=0.4.9" },
     { name = "lxml", specifier = ">=6.0.0" },
     { name = "mammoth", specifier = ">=1.6.0" },
     { name = "pdfplumber", specifier = ">=0.9.0" },

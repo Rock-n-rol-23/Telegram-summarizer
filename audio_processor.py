@@ -10,11 +10,25 @@ import math
 import subprocess
 import shutil
 from typing import Dict, Any, Optional, List, Tuple
-from pydub import AudioSegment
 from groq import Groq
+
+# --- ADD: make pydub use bundled ffmpeg ---
 from utils.ffmpeg import ensure_ffmpeg
+FFMPEG_BIN = ensure_ffmpeg()
+
+# Проброс для pydub
+from pydub import AudioSegment
+AudioSegment.converter = FFMPEG_BIN
+AudioSegment.ffmpeg = FFMPEG_BIN
+# AudioSegment.ffprobe = FFMPEG_BIN  # Не нужно - pydub не использует этот атрибут
+
+# Чтобы subprocess/другие либы находили бинарь
+os.environ["FFMPEG_BINARY"] = FFMPEG_BIN
+os.environ["PATH"] = os.path.dirname(FFMPEG_BIN) + os.pathsep + os.environ.get("PATH", "")
+# --- END ADD ---
 
 logger = logging.getLogger(__name__)
+logger.info(f"Using ffmpeg binary at: {FFMPEG_BIN}")
 
 SUPPORTED_EXTS = {".ogg", ".oga", ".mp3", ".m4a", ".wav", ".flac", ".webm", ".aac"}
 
@@ -34,12 +48,8 @@ class AudioProcessor:
 
     def _convert_to_wav16k_mono(self, src_path: str, dst_path: str) -> Tuple[float, int]:
         """Конвертация через ffmpeg + возврат (длительность_сек, битрейт_Гц)."""
-        ffmpeg = ensure_ffmpeg()
-        cmd = [
-            ffmpeg, "-y", "-i", src_path,
-            "-ac", "1", "-ar", "16000",  # mono 16kHz
-            "-vn", dst_path
-        ]
+        ffmpeg = FFMPEG_BIN  # вместо строкового 'ffmpeg'
+        cmd = [ffmpeg, "-y", "-i", src_path, "-ac", "1", "-ar", "16000", "-vn", dst_path]
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         audio = AudioSegment.from_wav(dst_path)
         duration = len(audio) / 1000.0
@@ -112,7 +122,13 @@ class AudioProcessor:
             }
         except Exception as e:
             logger.exception("Ошибка обработки аудио")
-            return {"success": False, "error": f"Ошибка обработки аудио: {e}"}
+            # Специальная обработка ошибок FFmpeg
+            if isinstance(e, FileNotFoundError) and "ffmpeg" in str(e).lower():
+                return {"success": False, "error": "FFmpeg не найден или не запускается. Обратитесь к администратору."}
+            elif isinstance(e, subprocess.CalledProcessError):
+                return {"success": False, "error": f"Ошибка конвертации аудио (FFmpeg): {e}"}
+            else:
+                return {"success": False, "error": f"Ошибка обработки аудио: {e}"}
         finally:
             # Очистка временных файлов
             try:

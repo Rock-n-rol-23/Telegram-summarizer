@@ -25,7 +25,7 @@ dependencies = [
     "speechrecognition>=3.14.3",
     "pocketsphinx>=5.0.4",
     "pydub>=0.25.1",
-    "imageio-ffmpeg>=0.6.0",
+    "imageio-ffmpeg>=0.4.9",
 ]
 
 [[tool.uv.index]]
