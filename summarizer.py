@@ -1,5 +1,5 @@
 """
-Модуль для суммаризации текста с использованием Groq API и Hugging Face fallback
+Модуль для суммаризации текста с использованием Groq API и поддержкой EN/RU
 """
 
 import asyncio
@@ -8,6 +8,7 @@ import re
 from typing import Optional, List
 from groq import Groq
 import os
+from utils.lang import detect_lang, is_ru, is_en
 
 # Инициализация для локальной модели (lazy loading)
 _local_tokenizer = None
@@ -53,6 +54,15 @@ class TextSummarizer:
         }
         
         logger.info(f"TextSummarizer инициализирован. Groq: {bool(self.groq_client)}, Local: {use_local_fallback and _transformers_available}")
+        
+        # Загружаем английский суммаризатор
+        try:
+            from summarizers.english_sumy import summarize_en
+            self.english_summarizer = summarize_en
+            logger.info("Английский суммаризатор загружен")
+        except ImportError as e:
+            logger.warning(f"Английский суммаризатор недоступен: {e}")
+            self.english_summarizer = None
     
     def _split_text_into_chunks(self, text: str, max_chunk_size: int = 4000) -> List[str]:
         """Разбивает длинный текст на логические чанки"""
@@ -328,22 +338,45 @@ class TextSummarizer:
         return self._create_simple_summary(text, target_ratio)
     
     async def _summarize_single_chunk(self, text: str, target_ratio: float) -> Optional[str]:
-        """Суммаризация одного чанка текста"""
-        # Пробуем Groq API
-        if self.groq_client:
-            summary = await self._summarize_with_groq(text, target_ratio)
-            if summary:
-                return summary
-            
-            logger.warning("Groq API не смог создать саммари, пробуем локальную модель")
+        """Суммаризация одного чанка текста с роутингом по языку"""
+        # Определяем язык текста
+        lang = detect_lang(text)
+        logger.info(f"Определен язык: {lang}")
         
-        # Пробуем локальную модель
-        if self.use_local_fallback:
-            summary = await self._summarize_with_local_model(text, target_ratio)
-            if summary:
-                return summary
+        # Роутинг по языку
+        if lang == 'ru':
+            # Русский текст - используем Groq API или локальную модель
+            if self.groq_client:
+                summary = await self._summarize_with_groq(text, target_ratio)
+                if summary:
+                    return summary
+                logger.warning("Groq API не смог создать саммари для RU, пробуем локальную модель")
             
-            logger.warning("Локальная модель не смогла создать саммари")
+            # Fallback на локальную модель для русского
+            if self.use_local_fallback:
+                summary = await self._summarize_with_local_model(text, target_ratio)
+                if summary:
+                    return summary
+                logger.warning("Локальная модель не смогла создать саммари для RU")
+                    
+        else:  # lang == 'en'
+            # Английский текст - сначала пробуем экстрактивный суммаризатор
+            if self.english_summarizer:
+                try:
+                    max_sentences = max(3, min(10, len(text) // 200))  # 3-10 предложений в зависимости от длины
+                    summary = self.english_summarizer(text, max_sentences)
+                    if summary and len(summary) > 20:
+                        logger.info(f"Английский экстрактивный суммаризатор создал саммари длиной: {len(summary)} символов")
+                        return summary
+                except Exception as e:
+                    logger.warning(f"Ошибка английского суммаризатора: {e}")
+            
+            # Fallback на Groq API для английского
+            if self.groq_client:
+                summary = await self._summarize_with_groq(text, target_ratio)
+                if summary:
+                    return summary
+                logger.warning("Groq API не смог создать саммари для EN")
         
         return None
     
