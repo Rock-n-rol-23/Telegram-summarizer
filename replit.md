@@ -1,7 +1,7 @@
 # Telegram Text Summarization Bot
 
 ## Overview
-This project is a Telegram bot that provides intelligent text summarization services using AI. It leverages the Groq API with Llama 3.1 70B as the primary summarization engine, with a Hugging Face Transformers fallback for reliability. The bot supports both Russian and English languages and offers summarization for text, web pages, various document types (DOC, DOCX, PDF, TXT), and YouTube videos. The project's vision is to offer a robust, always-on summarization tool accessible directly through Telegram.
+This project is a Telegram bot that provides intelligent text summarization services using AI. It leverages the Groq API with Llama 3.3 70B as the primary summarization engine, with audio transcription via Groq Whisper large v3. The bot supports both Russian and English languages and offers comprehensive summarization for text, web pages, various document types (DOC, DOCX, PDF, TXT), YouTube videos, and audio/voice messages. The project's vision is to offer a robust, always-on summarization tool accessible directly through Telegram with special emphasis on audio processing capabilities.
 
 ## User Preferences
 Preferred communication style: Simple, everyday language.
