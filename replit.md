@@ -53,6 +53,15 @@ The application follows a modular Python architecture with clear separation of c
 - **Progressive User Feedback**: Step-by-step progress messages (downloading → converting → transcribing → summarizing) with detailed audio information display.
 - **Robust Error Handling**: User-friendly error messages for common issues (file too large, no speech detected, unsupported format) with actionable recommendations.
 - **Universal File Support**: Added support for video notes (круглые видео) and improved detection of audio documents by both MIME type and file extension.
+- **Duration Formatting Fix**: Resolved "Unknown format code 'd' for object of type 'float'" error with safe duration formatting helpers.
+
+### Web Content Extraction Enhancements (2025-08-19)
+- **Multi-Stage Pipeline**: Implemented trafilatura → readability-lxml → bs4-heuristics extraction pipeline for robust web content processing.
+- **Enhanced Content Quality**: Better text extraction with intelligent content selectors, noise removal, and metadata preservation.
+- **SQLite Caching**: 72-hour TTL cache for repeated URL requests, significantly improving response times.
+- **Link Extraction**: Automatic extraction and normalization of links from articles, displayed to users (up to 5 links).
+- **Improved Error Handling**: User-friendly messages for blocked sites, timeouts, and content extraction failures.
+- **Backward Compatibility**: New extractor with fallback to legacy method ensures no functionality breaks.
 
 ## External Dependencies
 
