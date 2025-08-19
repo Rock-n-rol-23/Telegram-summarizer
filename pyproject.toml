@@ -27,6 +27,11 @@ dependencies = [
     "pydub>=0.25.1",
     "imageio-ffmpeg>=0.4.9",
     "lingua-language-detector==2.0.2",
+    "readability-lxml>=0.8.4.1",
+    "html5lib>=1.1",
+    "httpx>=0.28.1",
+    "selectolax>=0.3.33",
+    "trafilatura>=1.6.1",
 ]
 
 [[tool.uv.index]]

@@ -2076,9 +2076,23 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         )
                         continue
                     
-                    # Извлекаем контент
+                    # Извлекаем контент с помощью нового экстрактора
                     start_time = time.time()
-                    content_result = self.extract_webpage_content(url)
+                    try:
+                        from content_extraction import extract_url
+                        extracted_page = await extract_url(url)
+                        content_result = {
+                            'success': True,
+                            'content': extracted_page.text,
+                            'title': extracted_page.title or "Без заголовка",
+                            'links': extracted_page.links[:5],  # Первые 5 ссылок
+                            'word_count': extracted_page.word_count,
+                            'char_count': extracted_page.char_count
+                        }
+                    except Exception as e:
+                        logger.warning(f"Новый экстрактор не сработал для {url}: {e}")
+                        # Fallback на старый метод
+                        content_result = self.extract_webpage_content(url)
                     
                     if not content_result['success']:
                         await self.send_message(
@@ -2116,13 +2130,28 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         compression_ratio = len(summary) / len(content_result['content'])
                         
                         # Формируем красивый ответ
+                        # Добавляем блок ссылок, если они есть
+                        links_section = ""
+                        if 'links' in content_result and content_result['links']:
+                            links_list = []
+                            for link in content_result['links'][:5]:  # Первые 5 ссылок
+                                link_text = link.get('text', '').strip()[:50]
+                                if link_text and len(link_text) > 5:
+                                    links_list.append(f"• {link_text}")
+                            
+                            if links_list:
+                                links_section = f"""
+
+🔗 Ссылки из статьи:
+{chr(10).join(links_list)}"""
+
                         response_text = f"""📄 Резюме статьи (Уровень сжатия: {user_compression_level}%)
 
 🔗 Источник: {content_result['title'][:100]}
 📎 Ссылка: {url}
 
 📝 Основные моменты:
-{summary}
+{summary}{links_section}
 
 📊 Статистика:
 • Исходный текст: {len(content_result['content']):,} символов
