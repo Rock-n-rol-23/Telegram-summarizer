@@ -150,37 +150,89 @@ class SimpleTelegramBot:
     def extract_webpage_content(self, url: str, timeout: int = 30) -> dict:
         """Извлекает основной текст с веб-страницы"""
         try:
-            # Заголовки для имитации браузера
+            # Расширенные заголовки для лучшего обхода блокировок
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
             }
             
-            # Загрузка страницы
-            response = requests.get(url, headers=headers, timeout=timeout)
+            # Загрузка страницы с увеличенным timeout для медленных сайтов
+            response = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
             response.raise_for_status()
             
             # Проверка размера контента (максимум 5MB)
             if len(response.content) > 5 * 1024 * 1024:
                 raise Exception("Файл слишком большой для обработки")
             
-            # Очистка от HTML тегов напрямую
+            # Парсинг HTML
             soup = BeautifulSoup(response.content, 'lxml')
             
+            # Получение заголовка страницы
+            title_tag = soup.find('title')
+            title = title_tag.get_text().strip() if title_tag else "Без заголовка"
+            
+            # Проверка на Cloudflare и другие блокировки
+            cloudflare_indicators = [
+                'just a moment', 'challenge-platform', 'cloudflare',
+                'please wait while your request is being verified',
+                'enable javascript and cookies to continue',
+                '_cf_chl_opt', 'cf-browser-verification'
+            ]
+            
+            page_text = response.text.lower()
+            if any(indicator in page_text for indicator in cloudflare_indicators):
+                return {
+                    'success': False,
+                    'error': f'Сайт использует защиту от ботов (Cloudflare). Попробуйте скопировать текст статьи вручную или найти альтернативный источник.',
+                    'title': title,
+                    'blocked': True
+                }
+            
             # Удаление ненужных элементов
-            for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
+            for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside', 'noscript']):
                 element.decompose()
             
-            # Извлечение текста
-            text = soup.get_text()
+            # Извлечение основного контента
+            # Пытаемся найти основной контент по распространенным селекторам
+            main_content = None
+            content_selectors = [
+                'article', 'main', '.content', '#content', '.post-content', 
+                '.article-content', '.entry-content', '.post-body', '.story-body',
+                '.news-content', '.article-body'
+            ]
+            
+            for selector in content_selectors:
+                content_element = soup.select_one(selector)
+                if content_element and len(content_element.get_text().strip()) > 200:
+                    main_content = content_element
+                    break
+            
+            # Если основной контент не найден, используем весь текст
+            if main_content:
+                text = main_content.get_text()
+            else:
+                text = soup.get_text()
             
             # Очистка текста
             lines = (line.strip() for line in text.splitlines())
             chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
             text = ' '.join(chunk for chunk in chunks if chunk)
             
-            # Получение заголовка страницы
-            title_tag = soup.find('title')
-            title = title_tag.get_text().strip() if title_tag else "Без заголовка"
+            # Проверка на минимальную длину контента
+            if len(text) < 100:
+                return {
+                    'success': False,
+                    'error': 'Страница не содержит достаточно текстового контента или контент не удалось извлечь',
+                    'title': title,
+                    'content_too_short': True
+                }
             
             return {
                 'title': title,
@@ -190,13 +242,22 @@ class SimpleTelegramBot:
             }
             
         except requests.exceptions.Timeout:
-            return {'success': False, 'error': 'Время ожидания истекло'}
+            return {'success': False, 'error': 'Время ожидания истекло (сайт отвечает слишком медленно)'}
         except requests.exceptions.ConnectionError:
-            return {'success': False, 'error': 'Не удается подключиться к сайту'}
+            return {'success': False, 'error': 'Не удается подключиться к сайту (проверьте URL или доступность сайта)'}
         except requests.exceptions.HTTPError as e:
-            return {'success': False, 'error': f'Ошибка HTTP: {e.response.status_code}'}
+            status_code = e.response.status_code if e.response else 'неизвестный'
+            error_msg = {
+                403: 'Доступ запрещен (сайт блокирует ботов)',
+                404: 'Страница не найдена',
+                429: 'Слишком много запросов (сайт временно ограничил доступ)',
+                500: 'Внутренняя ошибка сервера',
+                502: 'Плохой шлюз',
+                503: 'Сервис временно недоступен'
+            }.get(status_code, f'Ошибка HTTP {status_code}')
+            return {'success': False, 'error': error_msg}
         except Exception as e:
-            return {'success': False, 'error': f'Ошибка при обработке: {str(e)}'}
+            return {'success': False, 'error': f'Ошибка при обработке: {str(e)[:100]}...'}
     
     def is_url_allowed(self, url: str) -> bool:
         """Проверяет, разрешен ли URL для обработки"""
