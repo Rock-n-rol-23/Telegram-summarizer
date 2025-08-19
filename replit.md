@@ -30,7 +30,7 @@ The application follows a modular Python architecture with clear separation of c
     - **Entity Extraction**: Finds and highlights dates, numbers, names, actions, and decisions.
     - **Key Insights Only**: Focused output with only critical information, facts, and conclusions.
     - **Compression-Aware Analysis**: Adjusts insight count based on compression level (10%=2 insights, 30%=3 insights, 50%=4 insights).
-- **Web Page Summarization**: Automatically detects URLs, extracts content using BeautifulSoup and `python-readability`, and summarizes. Supports up to 3 URLs per message and includes domain filtering.
+- **Web Page Summarization**: Automatically detects URLs, extracts content using BeautifulSoup with intelligent content selectors, and summarizes. Supports up to 3 URLs per message with domain filtering and Cloudflare protection detection.
 - **Document Summarization**: Supports uploading and summarizing PDF, DOCX, DOC, and TXT files (up to 20MB). Uses libraries like PyPDF2, pdfplumber, python-docx, mammoth, and chardet for text extraction.
 - **YouTube Video Summarization**: Detects YouTube URLs, extracts transcripts using `yt-dlp`, and summarizes video content. Supports videos up to 2 hours.
 - **Audio Processing & Summarization**: Complete audio file support (MP3, WAV, M4A, OGG, FLAC, AAC, OPUS) with automatic speech recognition and intelligent summarization.
@@ -45,6 +45,7 @@ The application follows a modular Python architecture with clear separation of c
 - **Simplified UI**: Focuses on core functionality without complex menus, ensuring ease of use.
 - **Comprehensive Input Handling**: Designed to process diverse input types (raw text, URLs, documents, YouTube links) robustly.
 - **Forwarded Media Support**: Bot processes forwarded audio/voice messages and audio documents without requiring file downloads to user's device, maintaining backward compatibility with non-audio forwarded media handling.
+- **Advanced Web Scraping**: Enhanced webpage content extraction with Cloudflare protection detection, intelligent content selectors, and improved error messages for blocked or problematic sites.
 
 ## External Dependencies
 
