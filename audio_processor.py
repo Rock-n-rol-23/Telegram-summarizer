@@ -9,6 +9,7 @@ import aiofiles
 import math
 import subprocess
 import shutil
+from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from groq import Groq
 
@@ -46,6 +47,57 @@ class AudioProcessor:
                     async for chunk in resp.content.iter_chunked(8192):
                         await f.write(chunk)
 
+    async def download_audio_by_file_id(self, bot_token: str, file_id: str, dst_path: str) -> str:
+        """
+        Скачивает аудио файл по file_id через Telegram Bot API.
+        
+        Args:
+            bot_token: Токен бота
+            file_id: ID файла в Telegram
+            dst_path: Путь для сохранения (директория)
+            
+        Returns:
+            Полный путь к скачанному файлу
+        """
+        # Получаем информацию о файле
+        get_file_url = f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}"
+        
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
+            # Получаем file_path
+            async with session.get(get_file_url) as resp:
+                resp.raise_for_status()
+                file_info = await resp.json()
+                
+                if not file_info.get("ok"):
+                    raise Exception(f"Не удалось получить информацию о файле: {file_info.get('description', 'неизвестная ошибка')}")
+                
+                file_path = file_info["result"]["file_path"]
+                file_size = file_info["result"].get("file_size", 0)
+                
+                # Проверяем размер файла
+                max_size_bytes = self.max_mb * 1024 * 1024
+                if file_size > max_size_bytes:
+                    raise Exception(f"Файл слишком большой: {file_size / 1024 / 1024:.1f} МБ (лимит: {self.max_mb} МБ)")
+            
+            # Скачиваем файл
+            download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
+            
+            # Определяем имя файла
+            import uuid
+            unique_id = str(uuid.uuid4())[:8]
+            file_extension = os.path.splitext(file_path)[1] or ".tmp"
+            final_filename = f"telegram_audio_{unique_id}{file_extension}"
+            final_path = os.path.join(dst_path, final_filename)
+            
+            async with session.get(download_url) as resp:
+                resp.raise_for_status()
+                async with aiofiles.open(final_path, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(8192):
+                        await f.write(chunk)
+            
+            logger.info(f"Файл скачан: {final_path} ({file_size / 1024:.1f} КБ)")
+            return final_path
+
     def _convert_to_wav16k_mono(self, src_path: str, dst_path: str) -> Tuple[float, int]:
         """Конвертация через ffmpeg + возврат (длительность_сек, битрейт_Гц)."""
         ffmpeg = FFMPEG_BIN  # вместо строкового 'ffmpeg'
@@ -54,6 +106,31 @@ class AudioProcessor:
         audio = AudioSegment.from_wav(dst_path)
         duration = len(audio) / 1000.0
         return duration, 16000
+
+    def convert_to_wav_16k_mono(self, src_path: str) -> str:
+        """
+        Универсальная конвертация аудио файла в WAV 16kHz mono PCM.
+        
+        Args:
+            src_path: Путь к исходному файлу
+            
+        Returns:
+            Путь к сконвертированному WAV файлу
+        """
+        # Создаем путь для выходного файла
+        src_path_obj = Path(src_path)
+        dst_path = str(src_path_obj.with_suffix('.wav'))
+        
+        try:
+            duration, sample_rate = self._convert_to_wav16k_mono(src_path, dst_path)
+            logger.info(f"Конвертация завершена: {src_path} -> {dst_path} ({duration:.1f}с, {sample_rate}Гц)")
+            return dst_path
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Ошибка конвертации ffmpeg: {e}")
+            raise Exception(f"Не удалось сконвертировать аудио файл. Возможно, файл поврежден или имеет неподдерживаемый формат.")
+        except Exception as e:
+            logger.error(f"Ошибка при конвертации {src_path}: {e}")
+            raise Exception(f"Ошибка обработки аудио: {str(e)}")
 
     def _split_wav(self, wav_path: str, chunk_secs: int = 600) -> List[str]:
         """Режем на куски по chunk_secs секунд, возвращаем пути к кускам."""
