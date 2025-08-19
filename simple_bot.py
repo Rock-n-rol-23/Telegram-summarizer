@@ -1242,7 +1242,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
 
     async def handle_audio_message(self, update: dict):
         """Универсальная обработка всех типов аудио сообщений"""
-        from utils.tg_audio import extract_audio_descriptor, get_audio_info_text
+        from utils.tg_audio import extract_audio_descriptor, get_audio_info_text, format_duration
         
         message = update["message"]
         chat_id = message["chat"]["id"]
@@ -1401,7 +1401,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 summary = "Краткое изложение недоступно. Вот полный текст:\n\n" + transcript[:1000] + ("..." if len(transcript) > 1000 else "")
             
             # Формируем финальный ответ
-            duration_text = f" ({duration // 60}:{duration % 60:02d})" if duration else ""
+            duration_text = f" ({format_duration(duration)})" if duration else ""
             final_message = f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n{summary}"
             
             # Ограничиваем длину сообщения
@@ -2239,6 +2239,8 @@ _Чтобы вернуться к обычной суммаризации, сн�
 
     async def handle_youtube_message(self, update: dict, youtube_urls: list):
         """Обработчик сообщений с YouTube URL для суммаризации видео"""
+        from utils.tg_audio import format_duration
+        
         message = update["message"]
         chat_id = message["chat"]["id"]
         user_id = message["from"]["id"]
@@ -2351,7 +2353,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     logger.error(f"Ошибка сохранения YouTube запроса в БД: {save_error}")
                 
                 # Формируем финальный ответ
-                duration_str = f"{video_duration//60}:{video_duration%60:02d}"
+                duration_str = format_duration(video_duration)
                 content_length = len(content_result['text'])
                 
                 # Определяем источники контента

@@ -9,6 +9,26 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+def _safe_int_seconds(value):
+    """Пробует привести значение длительности к int секунд (поддерживает int/float/str)."""
+    try:
+        if value is None:
+            return None
+        return int(round(float(value)))
+    except Exception:
+        return None
+
+def format_duration(value) -> str:
+    """
+    Возвращает строку формата M:SS (например, '1:06').
+    Поддерживает входные int/float/str секунд, None -> ''.
+    """
+    total = _safe_int_seconds(value)
+    if total is None:
+        return ""
+    minutes, seconds = divmod(total, 60)
+    return f"{minutes}:{seconds:02d}"
+
 # Поддерживаемые аудио расширения
 AUDIO_EXTENSIONS = {'.ogg', '.oga', '.mp3', '.m4a', '.wav', '.flac', '.webm', '.aac', '.opus'}
 
@@ -53,7 +73,7 @@ def extract_audio_descriptor(message: Dict[str, Any]) -> Optional[Dict[str, Any]
                 "kind": "voice",
                 "file_id": voice["file_id"],
                 "mime_type": voice.get("mime_type", "audio/ogg"),
-                "duration": voice.get("duration"),
+                "duration": _safe_int_seconds(voice.get("duration")),
                 "file_name": "voice.ogg"
             }
         
@@ -64,7 +84,7 @@ def extract_audio_descriptor(message: Dict[str, Any]) -> Optional[Dict[str, Any]
                 "kind": "audio", 
                 "file_id": audio["file_id"],
                 "mime_type": audio.get("mime_type"),
-                "duration": audio.get("duration"),
+                "duration": _safe_int_seconds(audio.get("duration")),
                 "file_name": audio.get("file_name", "audio.mp3")
             }
         
@@ -75,7 +95,7 @@ def extract_audio_descriptor(message: Dict[str, Any]) -> Optional[Dict[str, Any]
                 "kind": "video_note",
                 "file_id": video_note["file_id"],
                 "mime_type": "video/mp4",  # обычно MP4, но нам нужна аудио дорожка
-                "duration": video_note.get("duration"),
+                "duration": _safe_int_seconds(video_note.get("duration")),
                 "file_name": "video_note.mp4"
             }
         
@@ -205,9 +225,8 @@ def get_audio_info_text(descriptor: Dict[str, Any]) -> str:
     
     info = f"{kind_name}: {file_name}"
     
-    if duration:
-        minutes = duration // 60
-        seconds = duration % 60
-        info += f" ({minutes}:{seconds:02d})"
+    dur_text = format_duration(duration)
+    if dur_text:
+        info += f" ({dur_text})"
     
     return info
