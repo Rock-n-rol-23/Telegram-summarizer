@@ -1,0 +1,139 @@
+Цель: исправить падение при обработке пересланных голосовых/аудио сообщений из-за форматирования секунд через :02d при типе float. Сделать безопасное форматирование длительности и использовать его везде.
+
+Сделай так:
+
+Добавь универсальные хелперы форматирования длительности в utils/tg_audio.py (рядом с импортами, до функций):
+
+def _safe_int_seconds(value):
+    """Пробует привести значение длительности к int секунд (поддерживает int/float/str)."""
+    try:
+        if value is None:
+            return None
+        return int(round(float(value)))
+    except Exception:
+        return None
+
+def format_duration(value) -> str:
+    """
+    Возвращает строку формата M:SS (например, '1:06').
+    Поддерживает входные int/float/str секунд, None -> ''.
+    """
+    total = _safe_int_seconds(value)
+    if total is None:
+        return ""
+    minutes, seconds = divmod(total, 60)
+    return f"{minutes}:{seconds:02d}"
+
+
+Используй новый хелпер в get_audio_info_text (utils/tg_audio.py), вместо прямого :02d:
+
+Найди блок:
+
+duration = descriptor.get("duration")
+info = f"{kind_name}: {file_name}"
+
+if duration:
+    minutes = duration // 60
+    seconds = duration % 60
+    info += f" ({minutes}:{seconds:02d})"
+
+
+Замени на:
+
+duration = descriptor.get("duration")
+info = f"{kind_name}: {file_name}"
+
+dur_text = format_duration(duration)
+if dur_text:
+    info += f" ({dur_text})"
+
+
+В simple_bot.py импортируй новый хелпер рядом с существующим импортом утилит:
+
+Было:
+
+from utils.tg_audio import extract_audio_descriptor, get_audio_info_text
+
+
+Стало:
+
+from utils.tg_audio import extract_audio_descriptor, get_audio_info_text, format_duration
+
+
+Заменяй ручное форматирование длительности на хелпер в simple_bot.py:
+
+Найди место формирования итогового сообщения с duration_text (по шаблону ({duration // 60}:{duration % 60:02d})) и замени:
+
+# Было:
+duration_text = f" ({duration // 60}:{duration % 60:02d})" if duration else ""
+
+# Стало:
+duration_text = f" ({format_duration(duration)})" if duration else ""
+
+
+Найди форматирование video_duration и замени:
+
+# Было:
+duration_str = f"{video_duration//60}:{video_duration%60:02d}"
+
+# Стало:
+duration_str = format_duration(video_duration)
+
+
+(Необязательно, но полезно) Нормализуй duration при извлечении в utils/tg_audio.py (extract_audio_descriptor), чтобы в дескриптор всегда попадал int:
+
+Во всех местах, где возвращается duration из Telegram (voice/audio/video_note), оберни получение так:
+
+"duration": _safe_int_seconds(voice.get("duration"))
+# и аналогично для audio/video_note
+
+
+Добавь простой тест на форматирование tools/test_duration_format.py:
+
+#!/usr/bin/env python3
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.tg_audio import format_duration
+
+def run():
+    cases = [
+        (76, "1:16"),
+        (76.0, "1:16"),
+        ("76.0", "1:16"),
+        (0, "0:00"),
+        (5, "0:05"),
+        (125, "2:05"),
+        (None, ""),
+    ]
+    ok = True
+    for val, want in cases:
+        got = format_duration(val)
+        print(f"val={val!r} -> {got} (want {want})")
+        if got != want:
+            ok = False
+    print("\nRESULT:", "OK" if ok else "FAIL")
+    return 0 if ok else 1
+
+if __name__ == "__main__":
+    raise SystemExit(run())
+
+
+Пробеги проверки локально:
+
+python tools/test_duration_format.py
+
+python tools/test_audio_increment.py
+
+python tools/test_forwarded_audio.py
+
+Ожидаемый результат:
+
+Больше нет ошибки Unknown format code 'd' for object of type 'float'.
+
+При пересылке голосовых и аудио корректно показывается длительность в формате M:SS (например, 1:06).
+
+Сам бот не падает на шагах предварительного сообщения прогресса (⏳ Обрабатываю аудио…) и далее.
+
+Коммит-месседж:
+
+fix(audio): safe duration formatting for int/float; use format_duration helper across bot to prevent 'Unknown format code d' crashes; add tests
