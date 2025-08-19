@@ -1308,24 +1308,30 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 return
             
             # Обновляем прогресс - скачивание
-            if progress_message_id:
-                await self.edit_message(
-                    chat_id, 
-                    progress_message_id, 
-                    f"⬇️ Скачиваю файл…\n\n{audio_info}"
-                )
+            if progress_message_id and isinstance(progress_message_id, int):
+                try:
+                    await self.edit_message(
+                        chat_id, 
+                        progress_message_id, 
+                        f"⬇️ Скачиваю файл…\n\n{audio_info}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Не удалось обновить прогресс (скачивание): {e}")
             
             # Получаем URL файла для скачивания
             file_url = await self._get_file_url(audio_descriptor["file_id"])
             filename_hint = audio_descriptor.get("file_name", "audio")
             
             # Обновляем прогресс - конвертация
-            if progress_message_id:
-                await self.edit_message(
-                    chat_id, 
-                    progress_message_id, 
-                    f"🎛️ Конвертирую аудио…\n\n{audio_info}"
-                )
+            if progress_message_id and isinstance(progress_message_id, int):
+                try:
+                    await self.edit_message(
+                        chat_id, 
+                        progress_message_id, 
+                        f"🎛️ Конвертирую аудио…\n\n{audio_info}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Не удалось обновить прогресс (конвертация): {e}")
             
             # Обрабатываем аудио
             result = await self.audio_processor.process_audio_from_telegram(file_url, filename_hint)
@@ -1339,12 +1345,15 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 return
             
             # Обновляем прогресс - распознавание завершено
-            if progress_message_id:
-                await self.edit_message(
-                    chat_id, 
-                    progress_message_id, 
-                    f"📝 Готовлю саммари…\n\n{audio_info}"
-                )
+            if progress_message_id and isinstance(progress_message_id, int):
+                try:
+                    await self.edit_message(
+                        chat_id, 
+                        progress_message_id, 
+                        f"📝 Готовлю саммари…\n\n{audio_info}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Не удалось обновить прогресс (саммари): {e}")
             
             transcript = result["transcript"]
             duration = result.get("duration_sec")
@@ -1380,7 +1389,10 @@ _Чтобы вернуться к обычной суммаризации, сн�
             # Фолбэк суммаризация через Groq
             if not summary and self.groq_client:
                 try:
-                    summary = await self.summarize_text_groq(transcript, user_id)
+                    # Используем существующий метод suммаризации
+                    compression_level = self.get_user_compression_level(user_id)
+                    target_ratio = compression_level / 100.0
+                    summary = await self.summarize_text(transcript, target_ratio)
                 except Exception as e:
                     logger.warning(f"Groq суммаризация не сработала: {e}")
             
@@ -1399,7 +1411,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 final_message = f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n{summary}"
             
             # Отправляем результат
-            if progress_message_id:
+            if progress_message_id and isinstance(progress_message_id, int):
                 try:
                     await self.edit_message(chat_id, progress_message_id, final_message)
                 except Exception as e:
@@ -1411,7 +1423,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             # Сохраняем в базу
             try:
                 username = message["from"].get("username", "")
-                self.db.add_request(user_id, "audio", len(transcript), len(summary) if summary else 0, username)
+                self.db.save_user_request(user_id, username, len(transcript), len(summary) if summary else 0, 0.0, 'audio_processing')
             except Exception as e:
                 logger.error(f"Ошибка сохранения в БД: {e}")
         
