@@ -998,9 +998,19 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     await self.send_message(chat_id, f"❌ {download_result['error']}")
                     return
                 
-                # Обновляем сообщение о прогрессе
+                # Определяем прогресс сообщение в зависимости от типа файла
+                extension = download_result["file_extension"].lower()
+                if extension == '.pdf':
+                    progress_text = f"📄 Обрабатываю документ: {file_name}\n\n🔍 Извлекаю текст (PDF → текстовый слой + OCR)..."
+                elif extension == '.pptx':
+                    progress_text = f"📊 Обрабатываю презентацию: {file_name}\n\n🎯 Извлекаю слайды и заметки..."
+                elif extension in ('.png', '.jpg', '.jpeg'):
+                    progress_text = f"🖼️ Обрабатываю изображение: {file_name}\n\n👁️ Распознаю текст (OCR)..."
+                else:
+                    progress_text = f"📄 Обрабатываю документ: {file_name}\n\n📝 Извлекаю текст..."
+                
                 if processing_message_id:
-                    await self.edit_message(chat_id, processing_message_id, f"📄 Обрабатываю документ: {file_name}\n\n📝 Извлекаю текст...")
+                    await self.edit_message(chat_id, processing_message_id, progress_text)
                 
                 # Извлекаем текст из файла
                 text_result = self.file_processor.extract_text_from_file(
@@ -1018,6 +1028,8 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     return
                 
                 extracted_text = text_result["text"]
+                extraction_method = text_result.get("method", "unknown")
+                extraction_meta = text_result.get("meta", {})
                 
                 # Проверяем длину извлеченного текста
                 if len(extracted_text) < 100:
@@ -1026,9 +1038,19 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     await self.send_message(chat_id, f"📝 Текст слишком короткий!\n\nИз документа извлечено {len(extracted_text)} символов. Для качественной суммаризации нужно минимум 100 символов.")
                     return
                 
-                # Обновляем сообщение о прогрессе
+                # Показываем информацию о методе извлечения
+                if "ocr" in extraction_method and extraction_meta.get("ocr_pages"):
+                    ocr_info = f"🔎 Режим: PDF → OCR (страницы: {','.join(map(str, extraction_meta['ocr_pages']))})"
+                elif extraction_method == "python-pptx" and extraction_meta.get("slides"):
+                    slides_count = extraction_meta.get("total_slides", len(extraction_meta["slides"]))
+                    ocr_info = f"📊 Обнаружена презентация: {slides_count} слайдов"
+                elif "ocr" in extraction_method:
+                    ocr_info = f"👁️ Режим: OCR (распознавание текста)"
+                else:
+                    ocr_info = f"📝 Режим: {extraction_method}"
+                
                 if processing_message_id:
-                    await self.edit_message(chat_id, processing_message_id, f"📄 Обрабатываю документ: {file_name}\n\n🤖 Создаю резюме...")
+                    await self.edit_message(chat_id, processing_message_id, f"📄 Обрабатываю документ: {file_name}\n\n{ocr_info}\n\n🤖 Создаю резюме...")
                 
                 # Получаем уровень сжатия пользователя
                 compression_ratio = self.get_user_compression_level(user_id)
@@ -1037,16 +1059,34 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 summary = await self.summarize_file_content(extracted_text, file_name, download_result["file_extension"], compression_ratio)
                 
                 if summary:
+                    # Определяем иконку и заголовок по типу файла
+                    if extension == '.pptx':
+                        icon = "📊"
+                        doc_type = "презентации"
+                    elif extension in ('.png', '.jpg', '.jpeg'):
+                        icon = "🖼️"
+                        doc_type = "изображения"
+                    else:
+                        icon = "📄"
+                        doc_type = "документа"
+                    
+                    # Формируем дополнительную информацию
+                    extra_info = ""
+                    if extraction_meta.get("ocr_pages"):
+                        extra_info = f"\n• OCR страницы: {', '.join(map(str, extraction_meta['ocr_pages']))}"
+                    elif extraction_meta.get("total_slides"):
+                        extra_info = f"\n• Слайды обработаны: {extraction_meta['slides_with_content']}/{extraction_meta['total_slides']}"
+                    
                     # Формируем итоговый ответ
-                    response_text = f"""📄 **Резюме документа: {file_name}**
+                    response_text = f"""{icon} **Резюме {doc_type}: {file_name}**
 
 {summary}
 
 📊 **Статистика:**
-• Исходный документ: {len(extracted_text):,} символов
+• Исходный текст: {len(extracted_text):,} символов
 • Резюме: {len(summary):,} символов  
 • Сжатие: {compression_ratio:.0%}
-• Метод извлечения: {text_result.get('method', 'unknown')}"""
+• Метод извлечения: {extraction_method}{extra_info}"""
                     
                     # Удаляем сообщение о обработке
                     if processing_message_id:

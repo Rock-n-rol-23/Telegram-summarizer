@@ -63,6 +63,15 @@ The application follows a modular Python architecture with clear separation of c
 - **Improved Error Handling**: User-friendly messages for blocked sites, timeouts, and content extraction failures.
 - **Backward Compatibility**: New extractor with fallback to legacy method ensures no functionality breaks.
 
+### OCR and PPTX Integration (2025-08-19)
+- **PDF OCR Support**: Added `content_extraction/pdf_ocr.py` with PyMuPDF + Tesseract OCR for scanned documents (ru+en languages).
+- **PPTX Presentations**: New `content_extraction/pptx_extractor.py` extracts slides, speaker notes, and presentation structure.
+- **Enhanced File Processor**: Extended support for `.pptx`, `.png`, `.jpg`, `.jpeg` formats with intelligent routing.
+- **Progressive UI Feedback**: File-type specific progress messages (PDF→OCR, PPTX→slides, Image→OCR) with extraction statistics.
+- **OCR Configuration**: Added `OCR_LANGS`, `PDF_OCR_DPI`, `MAX_PAGES_OCR` environment variables with safe defaults.
+- **Comprehensive Testing**: Created test suites for PDF OCR and PPTX extraction with programmatic test file generation.
+- **Production Ready**: Code prepared for full OCR functionality when Tesseract is available in production environment.
+
 ## External Dependencies
 
 ### APIs

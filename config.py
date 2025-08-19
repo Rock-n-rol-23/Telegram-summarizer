@@ -68,6 +68,11 @@ class Config:
         self.LOCAL_LLM_CTX = int(os.getenv('LOCAL_LLM_CTX', '4096'))
         self.LOCAL_LLM_THREADS = int(os.getenv('LOCAL_LLM_THREADS', '0'))
         
+        # Настройки OCR
+        self.OCR_LANGS = os.getenv('OCR_LANGS', 'rus+eng')
+        self.PDF_OCR_DPI = int(os.getenv('PDF_OCR_DPI', '200'))
+        self.MAX_PAGES_OCR = int(os.getenv('MAX_PAGES_OCR', '50'))
+        
         # Валидация критически важных параметров
         self._validate_config()
     

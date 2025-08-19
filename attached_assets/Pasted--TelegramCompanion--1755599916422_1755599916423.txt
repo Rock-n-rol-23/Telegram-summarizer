@@ -1,0 +1,334 @@
+Контекст проекта: репозиторий уже загружен, корень: TelegramCompanion/. Бот сейчас умеет извлекать текст из PDF через pdfplumber/PyPDF2, но не справляется со сканами, и не поддерживает PPTX. Нужно добавить OCR и поддержку презентаций, а также аккуратно встроить это в текущие обработчики документов без поломок существующего функционала.
+
+Цели и критерии приёмки
+
+PDF:
+
+Если в PDF есть текстовый слой — извлекаем его.
+
+Если PDF — скан (нет текста) — автоматически включаем OCR (ru+en).
+
+Возвращаем text, method ("pymupdf+text" или "pymupdf+ocr") и meta (страницы, какие OCR’ились).
+
+PPTX:
+
+Извлекать заголовки и пункты слайдов, заметки спикера.
+
+Возвращать объединённый текст + meta.slides (title, bullets, notes).
+
+Большие файлы:
+
+Безопасное разбиение на чанки для суммаризации, чтобы не утыкаться в лимиты.
+
+Сохранить язык исходника (RU/EN).
+
+UI и логи:
+
+В ответе пользователю показывать, что использовалось: PDF: текстовый слой или PDF: OCR (страницы: …), PPTX извлечено: N слайдов.
+
+Подробные логи без утечек ключей.
+
+Бесплатные инструменты:
+
+Используем Tesseract OCR + PyMuPDF + python-pptx. Без платных API.
+
+Ничего не ломаем:
+
+Существующие обработчики текстов/ссылок/YouTube/аудио должны работать как раньше.
+
+Тесты добавить, но оставшиеся тесты не ломать.
+
+Зависимости и системные пакеты
+
+pyproject.toml — добавить в dependencies:
+
+pymupdf>=1.24.0
+pytesseract>=0.3.10
+Pillow>=10.0.0
+python-pptx>=0.6.23
+
+
+Dockerfile — установить Tesseract и языковые пакеты:
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    build-essential \
+    curl \
+    tesseract-ocr \
+    tesseract-ocr-rus \
+    tesseract-ocr-eng \
+ && rm -rf /var/lib/apt/lists/*
+
+
+.env / config.py — новые опции (с дефолтами):
+
+OCR_LANGS=rus+eng
+PDF_OCR_DPI=200
+MAX_PAGES_OCR=50
+
+
+В config.py добавить чтение этих переменных с безопасными дефолтами.
+
+Новые модули извлечения контента
+
+Создай TelegramCompanion/content_extraction/pdf_ocr.py:
+
+import logging, os
+from typing import Dict, Any, List
+import fitz  # PyMuPDF
+import pytesseract
+from PIL import Image
+
+logger = logging.getLogger(__name__)
+
+def extract_text_from_pdf(path: str, ocr_langs: str = "rus+eng",
+                          dpi: int = 200, max_pages_ocr: int = 50,
+                          min_text_chars_per_page: int = 40) -> Dict[str, Any]:
+    """
+    Сначала пробуем текстовый слой (PyMuPDF). Если на странице < min_text_chars_per_page,
+    делаем OCR с рендером страницы в изображение.
+    """
+    try:
+        doc = fitz.open(path)
+    except Exception as e:
+        return {"success": False, "error": f"Не удалось открыть PDF: {e}"}
+
+    pages = doc.page_count
+    text_chunks: List[str] = []
+    ocr_pages: List[int] = []
+    used_ocr = False
+
+    for i in range(pages):
+        page = doc.load_page(i)
+        page_text = page.get_text("text") or ""
+        page_text = page_text.strip()
+
+        if len(page_text) >= min_text_chars_per_page:
+            text_chunks.append(page_text)
+            continue
+
+        # OCR, если мало текста
+        if i < max_pages_ocr:
+            try:
+                matrix = fitz.Matrix(dpi/72, dpi/72)
+                pix = page.get_pixmap(matrix=matrix, alpha=False)
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                ocr_text = pytesseract.image_to_string(img, lang=ocr_langs, config="--psm 6")
+                ocr_text = (ocr_text or "").strip()
+                if ocr_text:
+                    text_chunks.append(ocr_text)
+                    ocr_pages.append(i + 1)
+                    used_ocr = True
+            except Exception as ocr_err:
+                logger.warning(f"OCR ошибка на странице {i+1}: {ocr_err}")
+        else:
+            logger.info(f"Пропущен OCR на странице {i+1}: достигнут лимит {max_pages_ocr}")
+
+    full_text = "\n\n".join(text_chunks).strip()
+    if not full_text:
+        return {"success": False, "error": "PDF не содержит извлекаемого текста и OCR не дал результата"}
+
+    return {
+        "success": True,
+        "text": full_text,
+        "method": f"pymupdf+{'ocr' if used_ocr else 'text'}",
+        "meta": {"pages": pages, "ocr_pages": ocr_pages}
+    }
+
+
+Создай TelegramCompanion/content_extraction/pptx_extractor.py:
+
+from typing import Dict, Any, List
+from pptx import Presentation
+
+def extract_text_from_pptx(path: str) -> Dict[str, Any]:
+    try:
+        prs = Presentation(path)
+    except Exception as e:
+        return {"success": False, "error": f"Не удалось открыть PPTX: {e}"}
+
+    slides_meta: List[dict] = []
+    combined = []
+
+    for idx, slide in enumerate(prs.slides, start=1):
+        title = ""
+        if getattr(slide.shapes, "title", None) and slide.shapes.title and slide.shapes.title.text:
+            title = slide.shapes.title.text.strip()
+
+        bullets: List[str] = []
+        for shape in slide.shapes:
+            if hasattr(shape, "text_frame") and shape.text_frame and shape.text_frame.text:
+                bullets.append(shape.text_frame.text.strip())
+
+        notes = ""
+        if hasattr(slide, "notes_slide") and slide.notes_slide and slide.notes_slide.notes_text_frame:
+            notes = (slide.notes_slide.notes_text_frame.text or "").strip()
+
+        slides_meta.append({
+            "index": idx,
+            "title": title,
+            "bullets": [b for b in bullets if b],
+            "notes": notes
+        })
+
+        block = [f"Слайд {idx}: {title}".strip()]
+        if bullets:
+            block.append("\n".join(bullets))
+        if notes:
+            block.append(f"Заметки: {notes}")
+        combined.append("\n".join([b for b in block if b]).strip())
+
+    joined = "\n\n".join(combined).strip()
+    if not joined:
+        return {"success": False, "error": "Не удалось извлечь текст из PPTX"}
+
+    return {"success": True, "text": joined, "method": "python-pptx", "meta": {"slides": slides_meta}}
+
+Встройка в существующий FileProcessor
+
+Отредактируй TelegramCompanion/file_processor.py:
+
+Вверху добавить импорты:
+
+from content_extraction.pdf_ocr import extract_text_from_pdf as ocr_pdf_extract
+from content_extraction.pptx_extractor import extract_text_from_pptx
+
+
+В __init__ расширить форматы:
+
+self.supported_extensions = ['.pdf', '.docx', '.doc', '.txt', '.pptx', '.png', '.jpg', '.jpeg']
+
+
+Добавить методы:
+
+def extract_text_from_pdf(self, file_path: str) -> Dict[str, Any]:
+    from config import OCR_LANGS, PDF_OCR_DPI, MAX_PAGES_OCR
+    return ocr_pdf_extract(
+        file_path,
+        ocr_langs=os.getenv("OCR_LANGS", "rus+eng"),
+        dpi=int(os.getenv("PDF_OCR_DPI", 200)),
+        max_pages_ocr=int(os.getenv("MAX_PAGES_OCR", 50))
+    )
+
+def extract_text_from_pptx(self, file_path: str) -> Dict[str, Any]:
+    return extract_text_from_pptx(file_path)
+
+def extract_text_from_image(self, file_path: str) -> Dict[str, Any]:
+    # простой OCR для изображений
+    try:
+        import pytesseract
+        from PIL import Image
+        img = Image.open(file_path)
+        txt = pytesseract.image_to_string(img, lang=os.getenv("OCR_LANGS", "rus+eng"), config="--psm 6").strip()
+        if not txt:
+            return {"success": False, "error": "Не удалось распознать текст на изображении"}
+        return {"success": True, "text": txt, "method": "image-ocr", "meta": {}}
+    except Exception as e:
+        return {"success": False, "error": f"OCR ошибка: {e}"}
+
+
+В extract_text_from_file(...) добавить разветвление:
+
+if extension == '.pdf':
+    return self.extract_text_from_pdf(file_path)
+elif extension == '.pptx':
+    return self.extract_text_from_pptx(file_path)
+elif extension in ('.png', '.jpg', '.jpeg'):
+    return self.extract_text_from_image(file_path)
+# остальное — как было (docx/doc/txt)
+
+Изменения в обработчике документов бота
+
+Файл: TelegramCompanion/simple_bot.py
+
+В handle_document_message после успешного извлечения text_result вставить информативную строку прогресса. Если text_result.get("method","") содержит "ocr", добавь в промежуточное сообщение вида:
+
+📄 Обрабатываю документ: {file_name}
+🔎 Режим: PDF → OCR (страницы: {','.join(map(str, text_result['meta'].get('ocr_pages', [])))})
+
+
+Если method == "python-pptx", показывай:
+
+📊 Обнаружена презентация: {кол-во слайдов} слайдов
+
+
+Для длинных документов реализуй безопасное разбиение на чанки перед суммаризацией (если этого нет). Простая стратегия:
+
+Нормализованный текст разбить на ~3500–4500 символов.
+
+Суммаризировать чанки по очереди текущим TextSummarizer, затем объединить результат и прогнать финальную краткую суммаризацию над объединением (cascade summarize).
+
+Умная суммаризация презентаций (минимальные правки)
+
+Файл: TelegramCompanion/smart_summarizer.py
+
+В detect_content_type(...) добавь распознавание презентации по признакам:
+
+Имя файла с расширением .pptx или text_result.method == "python-pptx".
+
+Либо meta.get('slides') присутствует, либо PDF с множеством коротких абзацев по страницам.
+
+Для типа "presentation" добавь специальный шаблон сборки ответа:
+
+Обзор колоды (3–5 пунктов)
+
+Ключевые выводы (до 7 пунктов)
+
+Слайды (до 10): по 1–2 маркера на слайд; если слайдов больше — «остальные в кратком виде…»
+
+Примечание: не ломай существующий вызов Groq/локальных методов; просто меняй формат пост-обработки текста.
+
+Тесты
+
+Добавь новые тесты в TelegramCompanion/tests/:
+
+test_pdf_text_then_ocr.py
+
+Сгенерировать программно PDF со страницей с текстом и страницей-изображением (через PyMuPDF/PIL).
+
+Проверить, что первая страница читается как текст, вторая — через OCR; meta.ocr_pages содержит вторую.
+
+test_pptx_extraction.py
+
+Программно создать простой .pptx из 2–3 слайдов (python-pptx).
+
+Проверить, что meta.slides заполнен и method == "python-pptx".
+
+test_image_ocr.py
+
+Создать картинку с русско-английским текстом, проверить image-ocr.
+
+Все тесты пометь «пропускать», если Tesseract не найден (чтобы CI не падал без системного OCR):
+
+import shutil, pytest
+pytest.skip(reason="tesseract not installed", allow_module_level=True) if shutil.which("tesseract") is None else None
+
+Документация и помощь пользователю
+
+Обнови блок возможностей в simple_bot приветствии и README.md:
+
+«📄 PDF (включая сканы) — извлечение текста с OCR (ru+en)»
+
+«📊 PPTX — обработка презентаций, заголовков, пунктов и заметок»
+
+Укажи лимиты: до 20 МБ (телеграм), OCR до MAX_PAGES_OCR страниц, DPI конфигурируется.
+
+Ограничения и безопасные дефолты
+
+Если пришёл .ppt (старый формат), вернуть вежливую ошибку: «Конвертируйте в .pptx или PDF».
+
+Если PDF слишком большой для OCR (страниц > MAX_PAGES_OCR), сделать частичный OCR (первые N страниц) + предупредить в ответе пользователю.
+
+В логах не печатать полный текст документов, только статистику.
+
+Проверка после внедрения
+
+Текстовый PDF → должен пройти без OCR, method=pymupdf+text.
+
+Скан PDF → method=pymupdf+ocr, перечисление ocr_pages.
+
+PPTX с 3 слайдами → method=python-pptx, в ответе указать «Обнаружена презентация: 3 слайда», саммари в slide-by-slide формате.
+
+Большой PDF (50+ страниц) → частичный OCR, предупреждение пользователю, отсутствие ошибок.
+
+Сделай все изменения атомарно коммитами по шагам, прогоняй тесты и не трогай остальной функционал (аудио, web, YouTube), кроме добавления информативных сообщений прогресса.
