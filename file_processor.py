@@ -27,13 +27,31 @@ try:
 except ImportError:
     HAS_DOC_SUPPORT = False
 
+# Импорты для новых модулей
+try:
+    from content_extraction.pdf_ocr import extract_text_from_pdf as ocr_pdf_extract
+    from content_extraction.pptx_extractor import extract_text_from_pptx
+    HAS_ENHANCED_PDF_SUPPORT = True
+    HAS_PPTX_SUPPORT = True
+except ImportError as e:
+    HAS_ENHANCED_PDF_SUPPORT = False
+    HAS_PPTX_SUPPORT = False
+    logger.warning(f"Улучшенная поддержка PDF/PPTX недоступна: {e}")
+
 logger = logging.getLogger(__name__)
 
 class FileProcessor:
     """Класс для обработки файлов и извлечения текста"""
     
     def __init__(self):
-        self.supported_extensions = ['.pdf', '.docx', '.doc', '.txt']
+        # Расширяем поддерживаемые форматы
+        base_formats = ['.pdf', '.docx', '.doc', '.txt']
+        if HAS_PPTX_SUPPORT:
+            base_formats.append('.pptx')
+        if HAS_ENHANCED_PDF_SUPPORT:
+            base_formats.extend(['.png', '.jpg', '.jpeg'])  # OCR для изображений
+        
+        self.supported_extensions = base_formats
         self.max_file_size = 20 * 1024 * 1024  # 20MB - лимит Telegram
         
     async def download_telegram_file(self, file_info: Dict[str, Any], file_name: str, file_size: int) -> Dict[str, Any]:
@@ -88,7 +106,18 @@ class FileProcessor:
             }
     
     def extract_text_from_pdf(self, file_path: str) -> Dict[str, Any]:
-        """Извлекает текст из PDF файла"""
+        """Извлекает текст из PDF файла с поддержкой OCR"""
+        # Приоритет новому экстрактору с OCR
+        if HAS_ENHANCED_PDF_SUPPORT:
+            logger.info("📄 Используется улучшенный PDF экстрактор с OCR")
+            return ocr_pdf_extract(
+                file_path,
+                ocr_langs=os.getenv("OCR_LANGS", "rus+eng"),
+                dpi=int(os.getenv("PDF_OCR_DPI", "200")),
+                max_pages_ocr=int(os.getenv("MAX_PAGES_OCR", "50"))
+            )
+        
+        # Fallback на старый метод
         if not HAS_PDF_SUPPORT:
             return {
                 'success': False,
@@ -326,6 +355,10 @@ class FileProcessor:
         # Выбираем метод в зависимости от расширения
         if extension == '.pdf':
             return self.extract_text_from_pdf(file_path)
+        elif extension == '.pptx':
+            return self.extract_text_from_pptx(file_path)
+        elif extension in ('.png', '.jpg', '.jpeg'):
+            return self.extract_text_from_image(file_path)
         elif extension == '.docx':
             return self.extract_text_from_docx(file_path)
         elif extension == '.doc':
@@ -338,6 +371,65 @@ class FileProcessor:
                 'error': f'Неподдерживаемый формат файла: {extension}'
             }
     
+    def extract_text_from_pptx(self, file_path: str) -> Dict[str, Any]:
+        """Извлекает текст из PPTX презентации"""
+        if not HAS_PPTX_SUPPORT:
+            return {
+                'success': False,
+                'error': 'PPTX поддержка недоступна - установите python-pptx'
+            }
+        
+        logger.info(f"📊 Начинаю извлечение текста из PPTX: {file_path}")
+        return extract_text_from_pptx(file_path)
+
+    def extract_text_from_image(self, file_path: str) -> Dict[str, Any]:
+        """Извлекает текст из изображения с помощью OCR"""
+        if not HAS_ENHANCED_PDF_SUPPORT:
+            return {
+                'success': False,
+                'error': 'OCR поддержка недоступна - установите pytesseract и Tesseract'
+            }
+        
+        try:
+            import pytesseract
+            from PIL import Image
+            
+            logger.info(f"🖼️ Начинаю OCR изображения: {file_path}")
+            
+            img = Image.open(file_path)
+            ocr_langs = os.getenv("OCR_LANGS", "rus+eng")
+            
+            txt = pytesseract.image_to_string(
+                img, 
+                lang=ocr_langs, 
+                config="--psm 6 -c tessedit_char_whitelist=АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюяABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,!?:;()[]{}\"'- \n"
+            ).strip()
+            
+            if not txt or len(txt) < 10:
+                return {
+                    'success': False,
+                    'error': 'Не удалось распознать текст на изображении'
+                }
+            
+            logger.info(f"🖼️ OCR извлек {len(txt)} символов")
+            
+            return {
+                'success': True,
+                'text': txt,
+                'method': 'image-ocr',
+                'meta': {
+                    'ocr_language': ocr_langs,
+                    'chars_extracted': len(txt)
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"🖼️ OCR ошибка: {e}")
+            return {
+                'success': False,
+                'error': f'OCR ошибка: {str(e)}'
+            }
+
     def cleanup_temp_file(self, temp_dir: str):
         """Очищает временные файлы"""
         try:
