@@ -44,8 +44,15 @@ The application follows a modular Python architecture with clear separation of c
 - **Modular Python**: Promotes maintainability and scalability.
 - **Simplified UI**: Focuses on core functionality without complex menus, ensuring ease of use.
 - **Comprehensive Input Handling**: Designed to process diverse input types (raw text, URLs, documents, YouTube links) robustly.
-- **Forwarded Media Support**: Bot processes forwarded audio/voice messages and audio documents without requiring file downloads to user's device, maintaining backward compatibility with non-audio forwarded media handling.
+- **Comprehensive Audio Support**: Bot processes all types of audio content including voice messages, audio files, video notes (круглые видео), and audio documents. Unified extraction system supports both direct and forwarded messages with detailed progress tracking.
 - **Advanced Web Scraping**: Enhanced webpage content extraction with Cloudflare protection detection, intelligent content selectors, and improved error messages for blocked or problematic sites.
+
+### Audio Processing Enhancements (2025-08-19)
+- **Unified Audio Descriptor System**: New `utils/tg_audio.py` module provides standardized extraction of audio metadata from all message types.
+- **Enhanced Forwarded Message Support**: Improved handling of forwarded voice messages, audio files, video notes, and audio documents with automatic type detection.
+- **Progressive User Feedback**: Step-by-step progress messages (downloading → converting → transcribing → summarizing) with detailed audio information display.
+- **Robust Error Handling**: User-friendly error messages for common issues (file too large, no speech detected, unsupported format) with actionable recommendations.
+- **Universal File Support**: Added support for video notes (круглые видео) and improved detection of audio documents by both MIME type and file extension.
 
 ## External Dependencies
 

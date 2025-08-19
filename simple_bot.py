@@ -1241,17 +1241,192 @@ _Чтобы вернуться к обычной суммаризации, сн�
             self.processing_users.discard(user_id)
 
     async def handle_audio_message(self, update: dict):
-        """Обработка аудио файлов и голосовых сообщений (обратная совместимость)"""
-        message = update["message"]
+        """Универсальная обработка всех типов аудио сообщений"""
+        from utils.tg_audio import extract_audio_descriptor, get_audio_info_text
         
-        if "voice" in message:
-            await self.on_voice(update)
-        elif "audio" in message:
-            await self.on_audio(update)
-        elif "document" in message:
-            await self.on_audio_document(update)
-        else:
-            await self.send_message(message["chat"]["id"], "❌ Не удалось определить тип аудио файла")
+        message = update["message"]
+        chat_id = message["chat"]["id"]
+        user_id = message["from"]["id"]
+        
+        # Извлекаем дескриптор аудио
+        audio_descriptor = extract_audio_descriptor(message)
+        
+        if not audio_descriptor:
+            await self.send_message(
+                chat_id, 
+                "🔍 Аудио не найдено\n\n"
+                "Я не нашёл аудио или голос в этом сообщении.\n"
+                "Поддерживаются:\n"
+                "• Голосовые сообщения (voice)\n"
+                "• Аудио файлы (audio)\n"
+                "• Видео сообщения/кружочки (video note)\n"
+                "• Документы с аудио файлами\n\n"
+                "Попробуйте переслать голосовое сообщение или загрузить аудио файл."
+            )
+            return
+        
+        # Логируем информацию об аудио
+        audio_info = get_audio_info_text(audio_descriptor)
+        logger.info(f"Обрабатываю аудио для пользователя {user_id}: {audio_info}")
+        
+        # Проверка лимита запросов
+        if not self.check_user_rate_limit(user_id):
+            await self.send_message(
+                chat_id, 
+                "⏰ Превышен лимит запросов!\n\n"
+                "Пожалуйста, подождите минуту перед отправкой нового аудио. Лимит: 10 запросов в минуту."
+            )
+            return
+        
+        # Проверка на повторную обработку
+        if user_id in self.processing_users:
+            await self.send_message(
+                chat_id, 
+                "⚠️ Обработка в процессе!\n\n"
+                "Пожалуйста, дождитесь завершения предыдущего запроса."
+            )
+            return
+        
+        # Добавляем пользователя в список обрабатываемых
+        self.processing_users.add(user_id)
+        
+        # Отправляем прогресс-сообщение
+        progress_msg = await self.send_message(
+            chat_id, 
+            f"⏳ Обрабатываю аудио…\n\n{audio_info}"
+        )
+        progress_message_id = progress_msg.get("result", {}).get("message_id") if progress_msg and progress_msg.get("ok") else None
+        
+        try:
+            # Проверяем доступность аудио процессора
+            if not self.audio_processor:
+                error_msg = "❌ Аудио обработка недоступна\n\nНет доступа к Groq API для распознавания речи."
+                if progress_message_id:
+                    await self.edit_message(chat_id, progress_message_id, error_msg)
+                else:
+                    await self.send_message(chat_id, error_msg)
+                return
+            
+            # Обновляем прогресс - скачивание
+            if progress_message_id:
+                await self.edit_message(
+                    chat_id, 
+                    progress_message_id, 
+                    f"⬇️ Скачиваю файл…\n\n{audio_info}"
+                )
+            
+            # Получаем URL файла для скачивания
+            file_url = await self._get_file_url(audio_descriptor["file_id"])
+            filename_hint = audio_descriptor.get("file_name", "audio")
+            
+            # Обновляем прогресс - конвертация
+            if progress_message_id:
+                await self.edit_message(
+                    chat_id, 
+                    progress_message_id, 
+                    f"🎛️ Конвертирую аудио…\n\n{audio_info}"
+                )
+            
+            # Обрабатываем аудио
+            result = await self.audio_processor.process_audio_from_telegram(file_url, filename_hint)
+            
+            if not result.get("success"):
+                error_msg = f"❌ Ошибка обработки аудио\n\n{result.get('error', 'Неизвестная ошибка')}"
+                if progress_message_id:
+                    await self.edit_message(chat_id, progress_message_id, error_msg)
+                else:
+                    await self.send_message(chat_id, error_msg)
+                return
+            
+            # Обновляем прогресс - распознавание завершено
+            if progress_message_id:
+                await self.edit_message(
+                    chat_id, 
+                    progress_message_id, 
+                    f"📝 Готовлю саммари…\n\n{audio_info}"
+                )
+            
+            transcript = result["transcript"]
+            duration = result.get("duration_sec")
+            
+            # Проверяем длину транскрипта
+            if not transcript or len(transcript.strip()) < 10:
+                error_msg = "❌ Речь не распознана\n\nВозможные причины:\n• Слишком тихая запись\n• Фоновый шум\n• Неподдерживаемый язык\n• Файл без речи"
+                if progress_message_id:
+                    await self.edit_message(chat_id, progress_message_id, error_msg)
+                else:
+                    await self.send_message(chat_id, error_msg)
+                return
+            
+            # Попытка smart суммаризации
+            summary = None
+            if hasattr(self, "smart_summarizer") and self.smart_summarizer:
+                try:
+                    compression_level = self.get_user_compression_level(user_id)
+                    target_ratio = compression_level / 100.0
+                    
+                    smart_result = await self.smart_summarizer.smart_summarize(
+                        transcript, 
+                        source_type="audio", 
+                        source_name=filename_hint, 
+                        compression_ratio=target_ratio
+                    )
+                    
+                    if smart_result.get('success'):
+                        summary = smart_result.get('summary', '')
+                except Exception as e:
+                    logger.warning(f"SmartSummarizer не сработал: {e}")
+            
+            # Фолбэк суммаризация через Groq
+            if not summary and self.groq_client:
+                try:
+                    summary = await self.summarize_text_groq(transcript, user_id)
+                except Exception as e:
+                    logger.warning(f"Groq суммаризация не сработала: {e}")
+            
+            # Если нет саммаризации, показываем транскрипт
+            if not summary:
+                summary = "Краткое изложение недоступно. Вот полный текст:\n\n" + transcript[:1000] + ("..." if len(transcript) > 1000 else "")
+            
+            # Формируем финальный ответ
+            duration_text = f" ({duration // 60}:{duration % 60:02d})" if duration else ""
+            final_message = f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n{summary}"
+            
+            # Ограничиваем длину сообщения
+            if len(final_message) > 4000:
+                summary_limit = 4000 - len(f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n") - 50
+                summary = summary[:summary_limit] + "..."
+                final_message = f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n{summary}"
+            
+            # Отправляем результат
+            if progress_message_id:
+                try:
+                    await self.edit_message(chat_id, progress_message_id, final_message)
+                except Exception as e:
+                    logger.warning(f"Не удалось отредактировать сообщение: {e}")
+                    await self.send_message(chat_id, final_message)
+            else:
+                await self.send_message(chat_id, final_message)
+            
+            # Сохраняем в базу
+            try:
+                username = message["from"].get("username", "")
+                self.db.add_request(user_id, "audio", len(transcript), len(summary) if summary else 0, username)
+            except Exception as e:
+                logger.error(f"Ошибка сохранения в БД: {e}")
+        
+        except Exception as e:
+            logger.error(f"Ошибка обработки аудио для пользователя {user_id}: {e}")
+            error_msg = f"❌ Произошла ошибка при обработке аудио\n\n{str(e)[:200]}..."
+            
+            if progress_message_id:
+                await self.edit_message(chat_id, progress_message_id, error_msg)
+            else:
+                await self.send_message(chat_id, error_msg)
+        
+        finally:
+            # Убираем пользователя из списка обрабатываемых
+            self.processing_users.discard(user_id)
     
     async def edit_message(self, chat_id: int, message_id: int, text: str):
         """Редактирует существующее сообщение"""
@@ -1599,39 +1774,22 @@ _Чтобы вернуться к обычной суммаризации, сн�
                             finally:
                                 # Удаляем пользователя из списка обрабатываемых
                                 self.processing_users.discard(user_id)
-                elif "audio" in message or "voice" in message:
-                    # Обработка аудио файлов и голосовых сообщений
+                elif "audio" in message or "voice" in message or "video_note" in message:
+                    # Обработка аудио файлов, голосовых сообщений и видео кружочков
                     if ("forward_from" in message) or ("forward_from_chat" in message) or ("forward_origin" in message):
-                        logger.info("Пересланное аудио/voice без текста — направляю в handle_audio_message")
+                        logger.info("Пересланное аудио/voice/video_note без текста — направляю в handle_audio_message")
                     await self.handle_audio_message(update)
                     return
                 elif "document" in message:
-                    # Проверяем, не является ли документ аудио файлом
-                    document = message["document"]
-                    mime_type = document.get("mime_type", "")
-                    file_name = document.get("file_name", "").lower()
+                    # Проверяем, является ли документ аудио файлом
+                    from utils.tg_audio import is_audio_document
                     
-                    # Список аудио MIME-типов и расширений
-                    audio_mime_types = [
-                        "audio/mpeg", "audio/mp3", "audio/wav", "audio/m4a", 
-                        "audio/ogg", "audio/flac", "audio/aac", "audio/opus"
-                    ]
-                    audio_extensions = [".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac", ".opus", ".oga"]
+                    doc = message["document"]
                     
-                    is_audio = (
-                        mime_type in audio_mime_types or 
-                        any(file_name.endswith(ext) for ext in audio_extensions)
-                    )
-                    
-                    if is_audio:
+                    if is_audio_document(doc):
                         if ("forward_from" in message) or ("forward_from_chat" in message) or ("forward_origin" in message):
-                            logger.info(f"Пересланный документ распознан как аудио: {file_name}, MIME: {mime_type} — направляю в handle_audio_message")
-                        else:
-                            logger.info(f"Документ определен как аудио файл: {file_name}, MIME: {mime_type}")
-                        # Создаем псевдо-аудио объект для совместимости с handle_audio_message
-                        audio_message = update.copy()
-                        audio_message["message"]["audio"] = document
-                        await self.handle_audio_message(audio_message)
+                            logger.info("Пересланный аудио документ без текста — направляю в handle_audio_message")
+                        await self.handle_audio_message(update)
                     else:
                         # Обработка документов (PDF, DOCX, DOC, TXT)
                         await self.handle_document_message(update)
