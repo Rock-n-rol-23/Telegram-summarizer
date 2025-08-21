@@ -327,9 +327,10 @@ class SimpleTelegramBot:
         if parse_mode:
             data["parse_mode"] = parse_mode
         if reply_markup:
-            data["reply_markup"] = reply_markup
+            import json as _json
+            data["reply_markup"] = _json.dumps(reply_markup)
         
-        logger.info(f"📤 SEND_MESSAGE: Отправка сообщения в чат {chat_id}")
+        logger.info(f"📤 SEND_MESSAGE: Отправка сообщения в чат {chat_id}, reply_markup: {bool(reply_markup)}")
         
         try:
             async with aiohttp.ClientSession() as session:
@@ -645,6 +646,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
         
         # Отвечаем на callback для убирания индикатора загрузки
         await self.answer_callback_query(callback_query["id"])
+        await asyncio.sleep(0)  # быстро вернуть управление
         
         user_id = callback_query["from"]["id"]
         username = callback_query["from"].get("username", "")
@@ -694,17 +696,19 @@ _Чтобы вернуться к обычной суммаризации, сн�
         """Отвечает на callback_query"""
         try:
             url = f"{self.base_url}/answerCallbackQuery"
-            data = {"callback_query_id": callback_query_id}
-            
+            payload = {"callback_query_id": callback_query_id}
             if text:
-                data["text"] = text
+                payload["text"] = text
             if show_alert:
-                data["show_alert"] = show_alert
+                payload["show_alert"] = show_alert
+
+            logger.info(f"ANSWER_CALLBACK_QUERY: отправляю payload: {payload}")
             
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=data) as response:
-                    return await response.json()
-                    
+                async with session.post(url, json=payload) as response:
+                    result = await response.json()
+                    logger.info(f"ANSWER_CALLBACK_QUERY: {result}")
+                    return result
         except Exception as e:
             logger.error(f"Ошибка ответа на callback query: {e}")
             return None
@@ -722,7 +726,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             }.get(lang, "🧠 Пришлите контент для умной суммаризации.")
             
             menu_keyboard = keyboards.build_main_menu(user_settings)
-            await self.edit_message(chat_id, message_id, no_context_text, reply_markup=menu_keyboard)
+            await self.safe_update_menu(chat_id, message_id, no_context_text, menu_keyboard)
             return
         
         # Если есть контекст, запускаем умную суммаризацию
@@ -739,27 +743,25 @@ _Чтобы вернуться к обычной суммаризации, сн�
         user_settings = self.user_settings_manager.get_user_settings(user_id)
         menu_keyboard = keyboards.build_main_menu(user_settings)
         
-        await self.edit_message(chat_id, message_id, result_text, reply_markup=menu_keyboard)
+        await self.safe_update_menu(chat_id, message_id, result_text, menu_keyboard)
     
     async def handle_callback_compression(self, chat_id: int, user_id: int, username: str, message_id: int, level: int):
         """Обработка callback для изменения уровня сжатия"""
-        success = self.user_settings_manager.set_compression_level(user_id, level, username)
-        
-        if success:
-            user_settings = self.user_settings_manager.get_user_settings(user_id)
-            lang = user_settings.get('language', 'ru').lower()
-            
-            # Создаем обновленное меню с отмеченным новым уровнем
-            menu_keyboard = keyboards.build_main_menu(user_settings)
-            
-            confirmation_text = {
-                'ru': f"✅ Уровень сжатия: {level}%\n\n📋 Главное меню",
-                'en': f"✅ Compression level: {level}%\n\n📋 Main menu"
-            }.get(lang, f"✅ Уровень сжатия: {level}%")
-            
-            await self.edit_message(chat_id, message_id, confirmation_text, reply_markup=menu_keyboard)
-        else:
-            await self.edit_message(chat_id, message_id, "❌ Ошибка изменения настроек")
+        current = self.user_settings_manager.get_user_settings(user_id).get('compression_level', 30)
+        updated = True
+        if level != current:
+            updated = self.user_settings_manager.set_compression_level(user_id, level, username)
+
+        user_settings = self.user_settings_manager.get_user_settings(user_id)
+        lang = user_settings.get('language', 'ru').lower()
+        menu_keyboard = keyboards.build_main_menu(user_settings)
+
+        confirmation_text = {
+            'ru': f"✅ Уровень сжатия: {level}%\n\n📋 Главное меню",
+            'en': f"✅ Compression level: {level}%\n\n📋 Main menu"
+        }.get(lang, f"✅ Уровень сжатия: {level}%")
+
+        await self.safe_update_menu(chat_id, message_id, confirmation_text, menu_keyboard)
     
     async def handle_callback_language_toggle(self, chat_id: int, user_id: int, username: str, message_id: int):
         """Обработка callback для переключения языка"""
@@ -773,7 +775,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             'en': "✅ Language changed to English\n\n📋 Main menu"
         }.get(new_lang, "✅ Язык изменен")
         
-        await self.edit_message(chat_id, message_id, confirmation_text, reply_markup=menu_keyboard)
+        await self.safe_update_menu(chat_id, message_id, confirmation_text, menu_keyboard)
     
     async def handle_callback_stats(self, chat_id: int, user_id: int, message_id: int):
         """Обработка callback для показа статистики"""
@@ -801,7 +803,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
 • {'Первый запрос' if lang == 'ru' else 'First request'}: {user_stats['first_request'] or ('Нет данных' if lang == 'ru' else 'No data')}"""
         
         back_keyboard = keyboards.build_back_menu(lang)
-        await self.edit_message(chat_id, message_id, stats_text, reply_markup=back_keyboard)
+        await self.safe_update_menu(chat_id, message_id, stats_text, back_keyboard)
     
     async def handle_callback_help(self, chat_id: int, user_id: int, message_id: int):
         """Обработка callback для показа помощи"""
@@ -874,7 +876,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
 📋 **ИСПОЛЬЗУЙТЕ КНОПКИ:** Кнопки интерфейса для быстрого доступа!"""
         
         back_keyboard = keyboards.build_back_menu(lang)
-        await self.edit_message(chat_id, message_id, help_text, reply_markup=back_keyboard)
+        await self.safe_update_menu(chat_id, message_id, help_text, back_keyboard)
     
     async def handle_callback_menu(self, chat_id: int, user_id: int, message_id: int):
         """Обработка callback для возврата в главное меню"""
@@ -884,7 +886,37 @@ _Чтобы вернуться к обычной суммаризации, сн�
         menu_text = keyboards.get_text('menu_title', lang)
         menu_keyboard = keyboards.build_main_menu(user_settings)
         
-        await self.edit_message(chat_id, message_id, menu_text, reply_markup=menu_keyboard)
+        await self.safe_update_menu(chat_id, message_id, menu_text, menu_keyboard)
+    
+    async def edit_message_reply_markup(self, chat_id: int, message_id: int, reply_markup: dict):
+        """Редактирует только клавиатуру сообщения"""
+        url = f"{self.base_url}/editMessageReplyMarkup"
+        import json as _json
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "reply_markup": _json.dumps(reply_markup)
+        }
+        
+        logger.info(f"EDIT_MESSAGE_REPLY_MARKUP: отправляю payload chat_id={chat_id}, message_id={message_id}")
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload) as response:
+                    result = await response.json()
+                    logger.info(f"editMessageReplyMarkup: {result}")
+                    return result
+        except Exception as e:
+            logger.error(f"editMessageReplyMarkup exception: {e}")
+            return None
+    
+    async def safe_update_menu(self, chat_id: int, message_id: int, text: str, menu_keyboard: dict):
+        """Безопасное обновление меню с fallback на клавиатуру"""
+        # Сначала попробуем заменить текст + клавиатуру
+        res = await self.edit_message(chat_id, message_id, text, reply_markup=menu_keyboard, parse_mode=None)
+        if not res or not res.get("ok"):
+            # Если текст не изменился или была ошибка парсинга — хотя бы обновим клавиатуру
+            await self.edit_message_reply_markup(chat_id, message_id, menu_keyboard)
     
     async def handle_menu_button(self, update: dict):
         """Обработка нажатия кнопки 'Меню' из reply-клавиатуры"""
@@ -1786,25 +1818,43 @@ _Чтобы вернуться к обычной суммаризации, сн�
             # Убираем пользователя из списка обрабатываемых
             self.processing_users.discard(user_id)
     
-    async def edit_message(self, chat_id: int, message_id: int, text: str, reply_markup: Optional[dict] = None, parse_mode: Optional[str] = None):
+    async def edit_message(self, chat_id: int, message_id: int, text: str,
+                           reply_markup: Optional[dict] = None,
+                           parse_mode: Optional[str] = None):
         """Редактирует существующее сообщение"""
+        url = f"{self.base_url}/editMessageText"
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text
+        }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        if reply_markup:
+            # Telegram нормально понимает объект в JSON, но сериализация гарантирует корректность
+            import json as _json
+            payload["reply_markup"] = _json.dumps(reply_markup)
+
+        logger.info(f"EDIT_MESSAGE_TEXT: отправляю payload chat_id={chat_id}, message_id={message_id}")
+        
         try:
-            url = f"{self.base_url}/editMessageText"
-            data = {
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "text": text,
-                "parse_mode": parse_mode or "Markdown"
-            }
-            
-            if reply_markup:
-                data["reply_markup"] = reply_markup
-            
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=data) as response:
-                    return await response.json()
+                async with session.post(url, json=payload) as response:
+                    raw = await response.text()
+                    try:
+                        import json
+                        result = json.loads(raw)
+                    except Exception:
+                        logger.error(f"editMessageText non-JSON response: {raw}")
+                        return None
+
+                    if not result.get("ok"):
+                        logger.error(f"editMessageText error: {result}")
+                    else:
+                        logger.info(f"editMessageText ok: {result.get('result', {}).get('message_id')}")
+                    return result
         except Exception as e:
-            logger.error(f"Ошибка редактирования сообщения: {e}")
+            logger.error(f"editMessageText exception: {e}")
             return None
     
     async def summarize_file_content(self, text: str, file_name: str = "", file_type: str = "", compression_ratio: float = 0.3) -> str:
@@ -2184,13 +2234,14 @@ _Чтобы вернуться к обычной суммаризации, сн�
     
     async def get_updates(self, offset = None, timeout: int = 30):
         """Получение обновлений от Telegram"""
+        import json
         url = f"{self.base_url}/getUpdates"
         params = {
             "timeout": timeout,
-            "allowed_updates": ["message", "callback_query"]
+            "allowed_updates": json.dumps(["message", "callback_query"])
         }
         
-        if offset:
+        if offset is not None:
             params["offset"] = offset
         
         logger.info(f"🔄 GET_UPDATES: Запрос обновлений с offset={offset}, timeout={timeout}")
