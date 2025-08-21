@@ -1407,7 +1407,24 @@ _Чтобы вернуться к обычной суммаризации, сн�
             
             # Получаем URL файла для скачивания
             file_url = await self._get_file_url(audio_descriptor["file_id"])
-            filename_hint = audio_descriptor.get("file_name", "audio")
+            filename_hint = audio_descriptor.get("filename") or "audio.ogg"
+            
+            # Добавляем маппинг расширения по mime и дефолт .ogg
+            if not os.path.splitext(filename_hint)[1]:
+                mime = (audio_descriptor.get("mime_type") or "").lower()
+                ext_by_mime = {
+                    "audio/ogg": ".ogg", "audio/oga": ".oga", "audio/opus": ".ogg",
+                    "audio/mpeg": ".mp3", "audio/mp3": ".mp3",
+                    "audio/mp4": ".m4a", "audio/x-m4a": ".m4a",
+                    "audio/aac": ".aac", "audio/flac": ".flac",
+                    "audio/wav": ".wav", "audio/x-wav": ".wav",
+                    "video/webm": ".webm", "video/mp4": ".m4a",
+                    "application/octet-stream": ".ogg",
+                }
+                filename_hint += ext_by_mime.get(mime, ".ogg")
+            
+            # Логируем информацию об аудио перед обработкой
+            logger.info(f"Audio: mime={audio_descriptor.get('mime_type')} filename_hint={filename_hint}")
             
             # Обновляем прогресс - конвертация
             if progress_message_id and isinstance(progress_message_id, int):

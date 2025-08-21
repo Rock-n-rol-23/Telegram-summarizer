@@ -1,0 +1,46 @@
+Цель: починить обработку аудио/voice/пересланных сообщений, которые сейчас падают с "Неподдерживаемый формат: .".
+
+Сделай правки:
+
+1) simple_bot.py
+- Найди функцию handle_audio_message(update: dict).
+- Замени формирование filename_hint на использование ключа "filename", а не "file_name".
+- Добавь маппинг расширения по mime и дефолт ".ogg", если расширение не распознано:
+
+    filename_hint = audio_descriptor.get("filename") or "audio.ogg"
+    if not os.path.splitext(filename_hint)[1]:
+        mime = (audio_descriptor.get("mime_type") or "").lower()
+        ext_by_mime = {
+            "audio/ogg": ".ogg", "audio/oga": ".oga", "audio/opus": ".ogg",
+            "audio/mpeg": ".mp3", "audio/mp3": ".mp3",
+            "audio/mp4": ".m4a", "audio/x-m4a": ".m4a",
+            "audio/aac": ".aac", "audio/flac": ".flac",
+            "audio/wav": ".wav", "audio/x-wav": ".wav",
+            "video/webm": ".webm", "video/mp4": ".m4a",
+            "application/octet-stream": ".ogg",
+        }
+        filename_hint += ext_by_mime.get(mime, ".ogg")
+
+- Убедись, что объявление функции: async def handle_audio_message(...).
+
+2) audio_processor.py
+- Вверху добавь ".opus" в SUPPORTED_EXTS:
+    SUPPORTED_EXTS = {".ogg", ".oga", ".mp3", ".m4a", ".wav", ".flac", ".webm", ".aac", ".opus"}
+
+- В методе process_audio_from_telegram():
+    * После извлечения ext добавь:
+        if not ext: ext = ".ogg"
+    * Если ext not in SUPPORTED_EXTS — не возвращай ошибку, а выведи logger.warning и продолжай (ffmpeg всё равно конвертнёт).
+
+3) Логи
+- В handle_audio_message() перед вызовом процессора добавь:
+    logger.info(f"Audio: mime={audio_descriptor.get('mime_type')} filename_hint={filename_hint}")
+
+4) Тест
+- Запусти локально сценарий, отправив боту:
+    а) обычное voice
+    б) пересланное voice
+    в) audio как документ без file_name
+- Убедись, что суммаризация проходит, и в логах нет "Неподдерживаемый формат: .".
+
+Сделай коммит с сообщением: "Fix audio filename key + robust ext fallback for voice/forwarded messages".
