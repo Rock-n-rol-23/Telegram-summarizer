@@ -27,18 +27,6 @@ from file_processor import FileProcessor
 from audio_processor import AudioProcessor
 from smart_summarizer import SmartSummarizer
 
-# Импорты для улучшенной аудио обработки
-try:
-    from summarizers.audio_pipeline import summarize_audio_file, format_audio_result, get_pipeline_info
-    from bot.ui_settings import init_settings_manager, get_user_audio_settings, get_settings_manager
-    from bot.ui_settings import generate_settings_keyboard, generate_format_keyboard, generate_verbosity_keyboard
-    from bot.ui_settings import format_settings_message, get_format_confirmation_message, get_verbosity_confirmation_message
-    ENHANCED_AUDIO_AVAILABLE = True
-    logger.info("Улучшенная аудио обработка доступна")
-except ImportError as e:
-    ENHANCED_AUDIO_AVAILABLE = False
-    logger.warning(f"Улучшенная аудио обработка недоступна: {e}")
-
 # Загружаем переменные окружения
 load_dotenv()
 
@@ -52,6 +40,18 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Импорты для улучшенной аудио обработки
+try:
+    from summarizers.audio_pipeline import summarize_audio_file, format_audio_result, get_pipeline_info
+    from bot.ui_settings import init_settings_manager, get_user_audio_settings, get_settings_manager
+    from bot.ui_settings import generate_settings_keyboard, generate_format_keyboard, generate_verbosity_keyboard
+    from bot.ui_settings import format_settings_message, get_format_confirmation_message, get_verbosity_confirmation_message
+    ENHANCED_AUDIO_AVAILABLE = True
+    logger.info("Улучшенная аудио обработка доступна")
+except ImportError as e:
+    ENHANCED_AUDIO_AVAILABLE = False
+    logger.warning(f"Улучшенная аудио обработка недоступна: {e}")
 
 # HTML константа для приветственного сообщения
 WELCOME_MESSAGE_HTML = """👋 Привет! Я превращаю длинные тексты, ссылки, видео и <b>даже голосовые/аудио</b> в короткие, понятные выжимки. Экономлю твоё время — оставляю только главное.
