@@ -31,7 +31,7 @@ os.environ["PATH"] = os.path.dirname(FFMPEG_BIN) + os.pathsep + os.environ.get("
 logger = logging.getLogger(__name__)
 logger.info(f"Using ffmpeg binary at: {FFMPEG_BIN}")
 
-SUPPORTED_EXTS = {".ogg", ".oga", ".mp3", ".m4a", ".wav", ".flac", ".webm", ".aac"}
+SUPPORTED_EXTS = {".ogg", ".oga", ".mp3", ".m4a", ".wav", ".flac", ".webm", ".aac", ".opus"}
 
 class AudioProcessor:
     def __init__(self, groq_client: Groq, max_file_size_mb: int = 50):
@@ -161,8 +161,10 @@ class AudioProcessor:
         if not filename_hint:
             filename_hint = "audio.ogg"
         _, ext = os.path.splitext(filename_hint.lower())
+        if not ext: 
+            ext = ".ogg"
         if ext not in SUPPORTED_EXTS:
-            return {"success": False, "error": f"Неподдерживаемый формат: {ext}. Поддерживаемые: {', '.join(sorted(SUPPORTED_EXTS))}"}
+            logger.warning(f"Неподдерживаемое расширение {ext}, но продолжаем - ffmpeg конвертирует")
 
         tmp_dir = tempfile.mkdtemp(prefix="tg_audio_")
         original_path = os.path.join(tmp_dir, f"orig{ext or '.bin'}")

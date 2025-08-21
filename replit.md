@@ -81,6 +81,7 @@ The application follows a modular Python architecture with clear separation of c
 - **Intelligent Processing**: Automatic verbosity adjustment for short audio (<2min → detailed), key fact preservation, and structured output with sections.
 - **Bot Integration**: Enhanced commands `/audio_settings` for user configuration, inline keyboards for settings management, and improved progress reporting.
 - **Comprehensive Testing**: Test suite `tests/test_audio_summary.py` validates sentence extraction, categorization, formatting, and settings management.
+- **Audio Processing Fixes (2025-08-21)**: Fixed filename handling for voice/forwarded messages, added robust extension fallback (.ogg default), added .opus support, and improved error handling for unsupported formats.
 
 ## External Dependencies
 
