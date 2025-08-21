@@ -27,6 +27,18 @@ from file_processor import FileProcessor
 from audio_processor import AudioProcessor
 from smart_summarizer import SmartSummarizer
 
+# Импорты для улучшенной аудио обработки
+try:
+    from summarizers.audio_pipeline import summarize_audio_file, format_audio_result, get_pipeline_info
+    from bot.ui_settings import init_settings_manager, get_user_audio_settings, get_settings_manager
+    from bot.ui_settings import generate_settings_keyboard, generate_format_keyboard, generate_verbosity_keyboard
+    from bot.ui_settings import format_settings_message, get_format_confirmation_message, get_verbosity_confirmation_message
+    ENHANCED_AUDIO_AVAILABLE = True
+    logger.info("Улучшенная аудио обработка доступна")
+except ImportError as e:
+    ENHANCED_AUDIO_AVAILABLE = False
+    logger.warning(f"Улучшенная аудио обработка недоступна: {e}")
+
 # Загружаем переменные окружения
 load_dotenv()
 
@@ -130,6 +142,14 @@ class SimpleTelegramBot:
         else:
             self.smart_summarizer = None
             logger.warning("Умный суммаризатор не инициализирован - отсутствует Groq API key")
+        
+        # Инициализация улучшенной аудио системы
+        if ENHANCED_AUDIO_AVAILABLE:
+            try:
+                init_settings_manager(self.db)
+                logger.info("Менеджер настроек аудио инициализирован")
+            except Exception as e:
+                logger.warning(f"Ошибка инициализации настроек аудио: {e}")
         
         logger.info("Simple Telegram Bot инициализирован")
     
@@ -493,6 +513,33 @@ class SimpleTelegramBot:
         
         await self.send_message(chat_id, help_text)
     
+    async def handle_audio_settings_command(self, update: dict):
+        """Обработка команды настроек аудио"""
+        if not ENHANCED_AUDIO_AVAILABLE:
+            await self.send_message(
+                update["message"]["chat"]["id"], 
+                "❌ Улучшенные настройки аудио недоступны - обновите бота"
+            )
+            return
+        
+        chat_id = update["message"]["chat"]["id"]
+        user_id = update["message"]["from"]["id"]
+        
+        try:
+            settings_manager = get_settings_manager()
+            if settings_manager:
+                user_settings = settings_manager.get_user_settings(user_id)
+                message_text = format_settings_message(user_settings)
+                keyboard = generate_settings_keyboard()
+                
+                await self.send_message_with_keyboard(chat_id, message_text, keyboard)
+            else:
+                await self.send_message(chat_id, "❌ Система настроек недоступна")
+                
+        except Exception as e:
+            logger.error(f"Ошибка настроек аудио для пользователя {user_id}: {e}")
+            await self.send_message(chat_id, "❌ Ошибка загрузки настроек")
+
     async def handle_smart_mode_command(self, update: dict):
         """Обработка команды /smart - переключение в режим умной суммаризации"""
         chat_id = update["message"]["chat"]["id"]
