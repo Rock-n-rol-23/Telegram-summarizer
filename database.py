@@ -105,9 +105,6 @@ class DatabaseManager:
                             summary_ratio REAL DEFAULT 0.3,
                             compression_level INTEGER DEFAULT 30,
                             language_preference TEXT DEFAULT 'auto',
-                            language TEXT DEFAULT 'ru',
-                            smart_mode BOOLEAN DEFAULT FALSE,
-                            first_interaction BOOLEAN DEFAULT TRUE,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         )
@@ -119,9 +116,6 @@ class DatabaseManager:
                             summary_ratio REAL DEFAULT 0.3,
                             compression_level INTEGER DEFAULT 30,
                             language_preference TEXT DEFAULT 'auto',
-                            language TEXT DEFAULT 'ru',
-                            smart_mode INTEGER DEFAULT 0,
-                            first_interaction INTEGER DEFAULT 1,
                             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                         )
@@ -228,13 +222,13 @@ class DatabaseManager:
         if not cursor.fetchone():
             if self.is_postgres:
                 cursor.execute("""
-                    INSERT INTO user_settings (user_id, summary_ratio, compression_level, language_preference, language, smart_mode, first_interaction)
-                    VALUES (%s, 0.3, 30, 'auto', 'ru', FALSE, TRUE)
+                    INSERT INTO user_settings (user_id, summary_ratio, compression_level, language_preference)
+                    VALUES (%s, 0.3, 30, 'auto')
                 """, (user_id,))
             else:
                 cursor.execute("""
-                    INSERT INTO user_settings (user_id, summary_ratio, compression_level, language_preference, language, smart_mode, first_interaction)
-                    VALUES (?, 0.3, 30, 'auto', 'ru', 0, 1)
+                    INSERT INTO user_settings (user_id, summary_ratio, compression_level, language_preference)
+                    VALUES (?, 0.3, 30, 'auto')
                 """, (user_id,))
     
     def get_user_settings(self, user_id: int) -> Dict:
@@ -245,28 +239,21 @@ class DatabaseManager:
                 
                 if self.is_postgres:
                     cursor.execute("""
-                        SELECT summary_ratio, compression_level, language_preference, language, smart_mode, first_interaction, created_at, updated_at
+                        SELECT summary_ratio, compression_level, language_preference, created_at, updated_at
                         FROM user_settings WHERE user_id = %s
                     """, (user_id,))
                 else:
                     cursor.execute("""
-                        SELECT summary_ratio, compression_level, language_preference, language, smart_mode, first_interaction, created_at, updated_at
+                        SELECT summary_ratio, compression_level, language_preference, created_at, updated_at
                         FROM user_settings WHERE user_id = ?
                     """, (user_id,))
                 
                 row = cursor.fetchone()
                 if row:
-                    # Конвертируем boolean значения для SQLite
-                    smart_mode = bool(row['smart_mode']) if self.is_postgres else bool(row['smart_mode'])
-                    first_interaction = bool(row['first_interaction']) if self.is_postgres else bool(row['first_interaction'])
-                    
                     return {
                         'summary_ratio': row['summary_ratio'],
                         'compression_level': row['compression_level'],
                         'language_preference': row['language_preference'],
-                        'language': row['language'] or 'ru',
-                        'smart_mode': smart_mode,
-                        'first_interaction': first_interaction,
                         'created_at': row['created_at'],
                         'updated_at': row['updated_at']
                     }
@@ -277,9 +264,6 @@ class DatabaseManager:
                         'summary_ratio': 0.3,
                         'compression_level': 30,
                         'language_preference': 'auto',
-                        'language': 'ru',
-                        'smart_mode': False,
-                        'first_interaction': True,
                         'created_at': datetime.now().isoformat(),
                         'updated_at': datetime.now().isoformat()
                     }
@@ -290,16 +274,12 @@ class DatabaseManager:
                 'summary_ratio': 0.3,
                 'compression_level': 30,
                 'language_preference': 'auto',
-                'language': 'ru',
-                'smart_mode': False,
-                'first_interaction': True,
                 'created_at': datetime.now().isoformat(),
                 'updated_at': datetime.now().isoformat()
             }
     
     def update_user_settings(self, user_id: int, summary_ratio: float = None, 
-                           compression_level: int = None, language_preference: str = None,
-                           language: str = None, smart_mode: bool = None, first_interaction: bool = None):
+                           compression_level: int = None, language_preference: str = None):
         """Обновление настроек пользователя"""
         try:
             with self.get_connection() as conn:
@@ -331,27 +311,6 @@ class DatabaseManager:
                     else:
                         update_fields.append("language_preference = ?")
                     params.append(language_preference)
-                
-                if language is not None:
-                    if self.is_postgres:
-                        update_fields.append("language = %s")
-                    else:
-                        update_fields.append("language = ?")
-                    params.append(language)
-                
-                if smart_mode is not None:
-                    if self.is_postgres:
-                        update_fields.append("smart_mode = %s")
-                    else:
-                        update_fields.append("smart_mode = ?")
-                    params.append(smart_mode if self.is_postgres else (1 if smart_mode else 0))
-                
-                if first_interaction is not None:
-                    if self.is_postgres:
-                        update_fields.append("first_interaction = %s")
-                    else:
-                        update_fields.append("first_interaction = ?")
-                    params.append(first_interaction if self.is_postgres else (1 if first_interaction else 0))
                 
                 if update_fields:
                     if self.is_postgres:
@@ -605,25 +564,7 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Ошибка записи изменения пользователя {user_id}: {e}")
 
-    def save_user_setting(self, user_id: int, setting_key: str, setting_value, username: str = ""):
-        """Сохранить произвольную пользовательскую настройку"""
-        try:
-            kwargs = {setting_key: setting_value}
-            self.update_user_settings(user_id, **kwargs)
-            
-            if username:
-                # Логируем изменение
-                old_settings = self.get_user_settings(user_id)
-                old_value = old_settings.get(setting_key, 'не установлено')
-                self.log_user_change(user_id, username, setting_key, str(old_value), str(setting_value))
-            
-            logger.info(f"Сохранена настройка {setting_key}={setting_value} для пользователя {user_id}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка сохранения настройки {setting_key} для пользователя {user_id}: {e}")
-            raise
-
-    def update_compression_level(self, user_id: int, compression_level: int, username: str = ""):
+    def update_compression_level(self, user_id: int, compression_level: int, username: str = None):
         """Обновление уровня сжатия для пользователя с логированием"""
         try:
             # Получаем старое значение для логирования
