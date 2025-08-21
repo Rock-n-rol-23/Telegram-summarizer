@@ -15,6 +15,7 @@ The application follows a modular Python architecture with clear separation of c
 - **Simplicity**: SQLite for local data persistence, simplified text-only user interface.
 - **Scalability**: Rate limiting, text limits, and efficient resource management for handling large volumes.
 - **Robustness**: Comprehensive error handling, input validation, and graceful shutdown.
+- **Advanced Audio Processing**: Multi-stage audio pipeline with intelligent summarization, configurable verbosity, and structured output formatting.
 
 ### Key Components & Features
 - **Bot Layer**: Handles Telegram interactions, command processing, and message routing using `python-telegram-bot`.
@@ -71,6 +72,15 @@ The application follows a modular Python architecture with clear separation of c
 - **OCR Configuration**: Added `OCR_LANGS`, `PDF_OCR_DPI`, `MAX_PAGES_OCR` environment variables with safe defaults.
 - **Comprehensive Testing**: Created test suites for PDF OCR and PPTX extraction with programmatic test file generation.
 - **Production Ready**: Code prepared for full OCR functionality when Tesseract is available in production environment.
+
+### Enhanced Audio Summarization System (2025-08-21)
+- **Advanced Transcription**: New `asr/transcribe.py` module with faster-whisper for CPU-based ASR, automatic fallback to smaller models on OOM.
+- **Smart Text Analysis**: `summarizers/text_summarizer.py` provides multi-stage extractive summarization with sentence categorization (agreements, deadlines, actions, conditions).
+- **Audio Pipeline**: `summarizers/audio_pipeline.py` combines transcription and smart summarization with progress tracking and performance monitoring.
+- **User Settings System**: `bot/ui_settings.py` manages persistent user preferences for format (structured/bullets/paragraph) and verbosity (short/normal/detailed).
+- **Intelligent Processing**: Automatic verbosity adjustment for short audio (<2min → detailed), key fact preservation, and structured output with sections.
+- **Bot Integration**: Enhanced commands `/audio_settings` for user configuration, inline keyboards for settings management, and improved progress reporting.
+- **Comprehensive Testing**: Test suite `tests/test_audio_summary.py` validates sentence extraction, categorization, formatting, and settings management.
 
 ## External Dependencies
 
