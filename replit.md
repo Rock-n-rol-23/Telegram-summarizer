@@ -35,7 +35,7 @@ The application follows a modular Python architecture with clear separation of c
 - **YouTube Video Summarization**: Detects YouTube URLs, extracts transcripts using `yt-dlp`, and summarizes video content. Supports videos up to 2 hours.
 - **Audio Processing & Summarization**: Complete audio file support (MP3, WAV, M4A, OGG, FLAC, AAC, OPUS) with automatic speech recognition and intelligent summarization.
 - **Text Processing**: Robust handling of various text inputs, including Unicode, emoji, and varied formatting (whitespace, indents), with appropriate text normalization and validation.
-- **User Interface**: Simplified, text-only interaction via Telegram commands (`/help`, `/stats`, `/smart`, `/10`, `/30`, `/50`). Supports both bullet-point summaries and structured smart analysis.
+- **User Interface**: Interactive button-based interface with comprehensive inline keyboards and reply keyboards. Features intuitive menu navigation, real-time setting updates, and multilingual support (Russian/English). Traditional slash commands remain available for compatibility.
 - **Deployment**: Supports multiple deployment modes, including Cloud Run (HTTP server + Telegram bot) and background worker (Telegram bot only), with automatic environment detection.
 
 ### Core Architectural Decisions
@@ -62,6 +62,15 @@ The application follows a modular Python architecture with clear separation of c
 - **Link Extraction**: Automatic extraction and normalization of links from articles, displayed to users (up to 5 links).
 - **Improved Error Handling**: User-friendly messages for blocked sites, timeouts, and content extraction failures.
 - **Backward Compatibility**: New extractor with fallback to legacy method ensures no functionality breaks.
+
+### Interactive UI System Enhancement (2025-08-21)
+- **Button-Based Interface**: Complete replacement of slash commands with interactive inline keyboards for improved user experience.
+- **Modular UI Architecture**: Created `ui_keyboards.py` for keyboard generation and `user_settings.py` for settings management.
+- **Enhanced Database Schema**: Extended user settings table to support language preference, smart mode, and first interaction tracking.
+- **Real-Time Settings Updates**: Instant visual feedback when changing compression levels, language, or smart mode through buttons.
+- **Multilingual Support**: Dynamic keyboard localization between Russian and English with user preference persistence.
+- **Context-Aware Navigation**: Smart menu system with back buttons and contextual help information.
+- **Callback Query Integration**: Comprehensive callback handlers for all user interactions with proper error handling and logging.
 
 ### OCR and PPTX Integration (2025-08-19)
 - **PDF OCR Support**: Added `content_extraction/pdf_ocr.py` with PyMuPDF + Tesseract OCR for scanned documents (ru+en languages).

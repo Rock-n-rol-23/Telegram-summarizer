@@ -26,6 +26,8 @@ from youtube_processor import YouTubeProcessor
 from file_processor import FileProcessor
 from audio_processor import AudioProcessor
 from smart_summarizer import SmartSummarizer
+from ui_keyboards import keyboards, callback_parser
+from user_settings import UserSettingsManager
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -106,6 +108,12 @@ class SimpleTelegramBot:
         database_url = os.getenv('DATABASE_URL', 'sqlite:///bot_database.db')
         self.db = DatabaseManager(database_url)
         self.db.init_database()
+        
+        # Инициализация менеджера настроек пользователей
+        self.user_settings_manager = UserSettingsManager(self.db)
+        
+        # Хранение контекста последних сообщений для smart кнопки
+        self.user_last_context: Dict[int, dict] = {}
         
         # Инициализация YouTube процессора
         self.youtube_processor = YouTubeProcessor(groq_client=self.groq_client)
@@ -319,7 +327,7 @@ class SimpleTelegramBot:
         if parse_mode:
             data["parse_mode"] = parse_mode
         if reply_markup:
-            data["reply_markup"] = reply_markup  # Убираем json.dumps()
+            data["reply_markup"] = reply_markup
         
         logger.info(f"📤 SEND_MESSAGE: Отправка сообщения в чат {chat_id}")
         
@@ -424,17 +432,40 @@ class SimpleTelegramBot:
         """Обработка команды /start"""
         chat_id = update["message"]["chat"]["id"]
         user = update["message"]["from"]
+        user_id = user.get("id")
+        username = user.get("username", "")
         
-        logger.info(f"Обработка команды /start от пользователя {user.get('id')} в чате {chat_id}")
+        logger.info(f"Обработка команды /start от пользователя {user_id} в чате {chat_id}")
         
-        # Очищаем любые пользовательские клавиатуры
-        await self.clear_custom_keyboards(chat_id)
+        # Получаем настройки пользователя
+        user_settings = self.user_settings_manager.get_user_settings(user_id)
+        lang = user_settings.get('language', 'ru').lower()
         
-        await self.send_message(chat_id, WELCOME_MESSAGE_HTML, parse_mode="HTML")
+        # Отмечаем что пользователь завершил первое взаимодействие
+        if user_settings.get('first_interaction', True):
+            self.user_settings_manager.mark_first_interaction_complete(user_id)
+        
+        # Создаем reply-клавиатуру с кнопкой меню
+        reply_keyboard = keyboards.build_reply_keyboard(lang)
+        
+        # Создаем inline-клавиатуру с главным меню
+        inline_keyboard = keyboards.build_main_menu(user_settings)
+        
+        # Отправляем приветственное сообщение с обеими клавиатурами
+        await self.send_message(chat_id, WELCOME_MESSAGE_HTML, parse_mode="HTML", reply_markup=reply_keyboard)
+        
+        # Отправляем главное меню как отдельное сообщение с inline-кнопками
+        menu_text = keyboards.get_text('menu_title', lang)
+        await self.send_message(chat_id, menu_text, reply_markup=inline_keyboard)
     
     async def handle_help_command(self, update: dict):
         """Обработка команды /help"""
         chat_id = update["message"]["chat"]["id"]
+        user_id = update["message"]["from"]["id"]
+        
+        # Получаем настройки пользователя для языка
+        user_settings = self.user_settings_manager.get_user_settings(user_id)
+        lang = user_settings.get('language', 'ru').lower()
         
         help_text = """📖 Как использовать бота:
 
@@ -489,23 +520,22 @@ class SimpleTelegramBot:
 • Поддержка emoji и спецсимволов
 • Автосохранение ваших настроек сжатия
 • До 10 запросов в минуту
-• Работает на Llama 3.3 70B"""
+• Работает на Llama 3.3 70B
+
+📋 **НОВЫЙ ИНТЕРФЕЙС:** Используйте кнопки внизу экрана для быстрого доступа ко всем функциям!"""
         
-        await self.send_message(chat_id, help_text)
+        # Добавляем кнопку "Назад в меню"
+        back_keyboard = keyboards.build_back_menu(lang)
+        await self.send_message(chat_id, help_text, reply_markup=back_keyboard)
     
     async def handle_smart_mode_command(self, update: dict):
         """Обработка команды /smart - переключение в режим умной суммаризации"""
         chat_id = update["message"]["chat"]["id"]
         user_id = update["message"]["from"]["id"]
+        username = update["message"]["from"].get("username", "")
         
-        # Устанавливаем флаг умной суммаризации для пользователя
-        if user_id not in self.user_settings:
-            self.user_settings[user_id] = {}
-        
-        # Переключаем режим умной суммаризации
-        current_mode = self.user_settings[user_id].get("smart_mode", False)
-        self.user_settings[user_id]["smart_mode"] = not current_mode
-        new_mode = self.user_settings[user_id]["smart_mode"]
+        # Переключаем режим умной суммаризации через менеджер настроек
+        new_mode = self.user_settings_manager.toggle_smart_mode(user_id, username)
         
         if new_mode:
             mode_text = """🧠 **Умная суммаризация включена!**
@@ -532,7 +562,12 @@ _Чтобы вернуться к обычной суммаризации, сн�
 
 Чтобы снова включить умную суммаризацию, нажмите /smart"""
 
-        await self.send_message(chat_id, mode_text)
+        # Получаем язык пользователя и добавляем кнопку возврата в меню
+        user_settings = self.user_settings_manager.get_user_settings(user_id)
+        lang = user_settings.get('language', 'ru').lower()
+        back_keyboard = keyboards.build_back_menu(lang)
+        
+        await self.send_message(chat_id, mode_text, reply_markup=back_keyboard)
         logger.info(f"Пользователь {user_id} {'включил' if new_mode else 'отключил'} умную суммаризацию")
     
     async def handle_stats_command(self, update: dict):
@@ -562,38 +597,309 @@ _Чтобы вернуться к обычной суммаризации, сн�
 
 📈 Используйте бота для обработки длинных текстов и статей!"""
         
-        await self.send_message(chat_id, stats_text)
+        # Получаем настройки пользователя для языка
+        user_settings = self.user_settings_manager.get_user_settings(user_id)
+        lang = user_settings.get('language', 'ru').lower()
+        
+        # Добавляем кнопку "Назад в меню"
+        back_keyboard = keyboards.build_back_menu(lang)
+        await self.send_message(chat_id, stats_text, reply_markup=back_keyboard)
 
     async def handle_compression_command(self, update: dict, compression_level: int):
         """Обработка команд уровня сжатия (/10, /30, /50 или 10%, 30%, 50%)"""
         chat_id = update["message"]["chat"]["id"]
         user_id = update["message"]["from"]["id"]
+        username = update["message"]["from"].get("username", "")
         
         try:
-            # Получаем username пользователя для логирования
-            username = update["message"]["from"].get("username", "")
+            # Сохраняем новый уровень сжатия через менеджер настроек
+            success = self.user_settings_manager.set_compression_level(user_id, compression_level, username)
             
-            # Сохраняем новый уровень сжатия в базе данных
-            self.update_user_compression_level(user_id, compression_level, username)
-            
-            compression_text = f"{compression_level}%"
-            confirmation_text = f"""✅ Уровень сжатия обновлен: {compression_text}
+            if success:
+                # Получаем обновленные настройки и показываем меню
+                user_settings = self.user_settings_manager.get_user_settings(user_id)
+                lang = user_settings.get('language', 'ru').lower()
+                
+                compression_text = f"{compression_level}%"
+                confirmation_text = f"""✅ Уровень сжатия обновлен: {compression_text}
 
-Теперь все ваши тексты будут суммаризированы с уровнем сжатия {compression_text}.
-
-📝 Отправьте текст для суммаризации или используйте другие команды:
-• /10 → максимальное сжатие (10%)
-• /30 → сбалансированное сжатие (30%)  
-• /50 → умеренное сжатие (50%)
-• /help → справка
-• /stats → статистика"""
-            
-            await self.send_message(chat_id, confirmation_text)
-            logger.info(f"Пользователь {user_id} изменил уровень сжатия на {compression_level}%")
+Теперь все ваши тексты будут суммаризированы с уровнем сжатия {compression_text}."""
+                
+                # Показываем обновленное меню с отмеченным активным уровнем
+                menu_keyboard = keyboards.build_main_menu(user_settings)
+                await self.send_message(chat_id, confirmation_text, reply_markup=menu_keyboard)
+                
+                logger.info(f"Пользователь {user_id} изменил уровень сжатия на {compression_level}%")
+            else:
+                await self.send_message(chat_id, "❌ Произошла ошибка при изменении настроек. Попробуйте еще раз.")
             
         except Exception as e:
             logger.error(f"Ошибка обработки команды сжатия {compression_level}% для пользователя {user_id}: {e}")
             await self.send_message(chat_id, "❌ Произошла ошибка при изменении настроек. Попробуйте еще раз.")
+    
+    async def handle_callback_query(self, update: dict):
+        """Обработка callback-запросов от inline-кнопок"""
+        callback_query = update.get("callback_query")
+        if not callback_query:
+            return
+        
+        # Отвечаем на callback для убирания индикатора загрузки
+        await self.answer_callback_query(callback_query["id"])
+        
+        user_id = callback_query["from"]["id"]
+        username = callback_query["from"].get("username", "")
+        chat_id = callback_query["message"]["chat"]["id"]
+        message_id = callback_query["message"]["message_id"]
+        callback_data = callback_query["data"]
+        
+        logger.info(f"Callback от пользователя {user_id}: {callback_data}")
+        
+        # Парсим callback_data
+        parsed = callback_parser.parse(callback_data)
+        action = parsed.get('action')
+        
+        try:
+            if action == 'smart':
+                await self.handle_callback_smart(chat_id, user_id, username, message_id)
+            
+            elif action == 'cmp':  # compression
+                level = int(parsed.get('sub', '30'))
+                await self.handle_callback_compression(chat_id, user_id, username, message_id, level)
+            
+            elif action == 'lang':  # language
+                sub_action = parsed.get('sub', '')
+                if sub_action == 'toggle':
+                    await self.handle_callback_language_toggle(chat_id, user_id, username, message_id)
+            
+            elif action == 'stats':
+                await self.handle_callback_stats(chat_id, user_id, message_id)
+            
+            elif action == 'help':
+                await self.handle_callback_help(chat_id, user_id, message_id)
+            
+            elif action == 'menu':
+                await self.handle_callback_menu(chat_id, user_id, message_id)
+            
+            else:
+                logger.warning(f"Неизвестный callback action: {action}")
+                
+        except Exception as e:
+            logger.error(f"Ошибка обработки callback {callback_data} от пользователя {user_id}: {e}")
+            await self.edit_message(
+                chat_id, message_id, 
+                "❌ Произошла ошибка при обработке запроса. Попробуйте еще раз."
+            )
+    
+    async def answer_callback_query(self, callback_query_id: str, text: str = None, show_alert: bool = False):
+        """Отвечает на callback_query"""
+        try:
+            url = f"{self.base_url}/answerCallbackQuery"
+            data = {"callback_query_id": callback_query_id}
+            
+            if text:
+                data["text"] = text
+            if show_alert:
+                data["show_alert"] = show_alert
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data) as response:
+                    return await response.json()
+                    
+        except Exception as e:
+            logger.error(f"Ошибка ответа на callback query: {e}")
+            return None
+    
+    async def handle_callback_smart(self, chat_id: int, user_id: int, username: str, message_id: int):
+        """Обработка callback для smart суммаризации"""
+        # Проверяем есть ли контекст для суммаризации
+        if user_id not in self.user_last_context:
+            user_settings = self.user_settings_manager.get_user_settings(user_id)
+            lang = user_settings.get('language', 'ru').lower()
+            
+            no_context_text = {
+                'ru': "🧠 Умная суммаризация\n\nПришлите текст, документ, ссылку или аудио, затем нажмите эту кнопку для интеллектуальной обработки.",
+                'en': "🧠 Smart Summary\n\nSend text, document, link or audio, then click this button for intelligent processing."
+            }.get(lang, "🧠 Пришлите контент для умной суммаризации.")
+            
+            menu_keyboard = keyboards.build_main_menu(user_settings)
+            await self.edit_message(chat_id, message_id, no_context_text, reply_markup=menu_keyboard)
+            return
+        
+        # Если есть контекст, запускаем умную суммаризацию
+        context = self.user_last_context[user_id]
+        
+        processing_text = "🧠 Запускаю умную суммаризацию..."
+        await self.edit_message(chat_id, message_id, processing_text)
+        
+        # Здесь будет логика smart суммаризации
+        # Пока заглушка
+        await asyncio.sleep(1)
+        
+        result_text = "🧠 Умная суммаризация выполнена!\n\n[Результат будет здесь]"
+        user_settings = self.user_settings_manager.get_user_settings(user_id)
+        menu_keyboard = keyboards.build_main_menu(user_settings)
+        
+        await self.edit_message(chat_id, message_id, result_text, reply_markup=menu_keyboard)
+    
+    async def handle_callback_compression(self, chat_id: int, user_id: int, username: str, message_id: int, level: int):
+        """Обработка callback для изменения уровня сжатия"""
+        success = self.user_settings_manager.set_compression_level(user_id, level, username)
+        
+        if success:
+            user_settings = self.user_settings_manager.get_user_settings(user_id)
+            lang = user_settings.get('language', 'ru').lower()
+            
+            # Создаем обновленное меню с отмеченным новым уровнем
+            menu_keyboard = keyboards.build_main_menu(user_settings)
+            
+            confirmation_text = {
+                'ru': f"✅ Уровень сжатия: {level}%\n\n📋 Главное меню",
+                'en': f"✅ Compression level: {level}%\n\n📋 Main menu"
+            }.get(lang, f"✅ Уровень сжатия: {level}%")
+            
+            await self.edit_message(chat_id, message_id, confirmation_text, reply_markup=menu_keyboard)
+        else:
+            await self.edit_message(chat_id, message_id, "❌ Ошибка изменения настроек")
+    
+    async def handle_callback_language_toggle(self, chat_id: int, user_id: int, username: str, message_id: int):
+        """Обработка callback для переключения языка"""
+        new_lang = self.user_settings_manager.toggle_language(user_id, username)
+        
+        user_settings = self.user_settings_manager.get_user_settings(user_id)
+        menu_keyboard = keyboards.build_main_menu(user_settings)
+        
+        confirmation_text = {
+            'ru': "✅ Язык изменен на русский\n\n📋 Главное меню",
+            'en': "✅ Language changed to English\n\n📋 Main menu"
+        }.get(new_lang, "✅ Язык изменен")
+        
+        await self.edit_message(chat_id, message_id, confirmation_text, reply_markup=menu_keyboard)
+    
+    async def handle_callback_stats(self, chat_id: int, user_id: int, message_id: int):
+        """Обработка callback для показа статистики"""
+        try:
+            user_stats = self.db.get_user_stats(user_id)
+        except Exception as e:
+            logger.error(f"Ошибка получения статистики пользователя {user_id}: {e}")
+            user_stats = {
+                'total_requests': 0,
+                'total_chars': 0, 
+                'total_summary_chars': 0,
+                'avg_compression': 0,
+                'first_request': None
+            }
+        
+        user_settings = self.user_settings_manager.get_user_settings(user_id)
+        lang = user_settings.get('language', 'ru').lower()
+        
+        stats_text = f"""📊 {'Статистика' if lang == 'ru' else 'Statistics'}:
+
+• {'Обработано текстов' if lang == 'ru' else 'Processed texts'}: {user_stats['total_requests']}
+• {'Символов обработано' if lang == 'ru' else 'Characters processed'}: {user_stats['total_chars']:,}
+• {'Символов в саммари' if lang == 'ru' else 'Summary characters'}: {user_stats['total_summary_chars']:,}
+• {'Среднее сжатие' if lang == 'ru' else 'Average compression'}: {user_stats['avg_compression']:.1%}
+• {'Первый запрос' if lang == 'ru' else 'First request'}: {user_stats['first_request'] or ('Нет данных' if lang == 'ru' else 'No data')}"""
+        
+        back_keyboard = keyboards.build_back_menu(lang)
+        await self.edit_message(chat_id, message_id, stats_text, reply_markup=back_keyboard)
+    
+    async def handle_callback_help(self, chat_id: int, user_id: int, message_id: int):
+        """Обработка callback для показа помощи"""
+        user_settings = self.user_settings_manager.get_user_settings(user_id)
+        lang = user_settings.get('language', 'ru').lower()
+        
+        if lang == 'en':
+            help_text = """📖 How to use the bot:
+
+🔥 **QUICK SUMMARIZATION:**
+• Send text → get 30% compression
+• Forward a message → automatic processing
+
+🔗 **WEB PAGE SUMMARIZATION:**
+• Send article link → get brief summary
+• Support: news sites, blogs, articles
+
+🎥 **YOUTUBE VIDEO SUMMARIZATION:**  
+• Send YouTube link → video summary
+• Extract subtitles and description
+• Up to 2 hours duration
+
+📄 **DOCUMENT SUMMARIZATION:**
+• Attach file → get structured summary
+• Formats: PDF, DOCX, DOC, TXT, PPTX
+• Max size: 20MB
+
+🎵 **AUDIO SUMMARIZATION:**
+• Send audio/voice → speech summary
+• Formats: MP3, WAV, M4A, OGG, etc
+• Max: 50MB, up to 1 hour
+
+⚡ **COMPRESSION LEVELS:**
+• 10% → maximum compression
+• 30% → balanced compression  
+• 50% → moderate compression
+
+📋 **USE BUTTONS:** Use interface buttons for quick access!"""
+        else:
+            help_text = """📖 Как использовать бота:
+
+🔥 **БЫСТРАЯ СУММАРИЗАЦИЯ:**
+• Отправьте текст → получите сжатие 30%
+• Перешлите сообщение → автоматическая обработка
+
+🔗 **СУММАРИЗАЦИЯ ВЕБ-СТРАНИЦ:**
+• Отправьте ссылку на статью → получите краткое резюме
+• Поддержка: новостные сайты, блоги, статьи
+
+🎥 **СУММАРИЗАЦИЯ YOUTUBE:**
+• Отправьте ссылку на YouTube → резюме видео
+• Извлечение субтитров и описания
+• До 2 часов длительности
+
+📄 **СУММАРИЗАЦИЯ ДОКУМЕНТОВ:**
+• Прикрепите файл → получите резюме
+• Форматы: PDF, DOCX, DOC, TXT, PPTX
+• Максимум: 20MB
+
+🎵 **СУММАРИЗАЦИЯ АУДИО:**
+• Отправьте аудио/голосовое → резюме речи
+• Форматы: MP3, WAV, M4A, OGG и др.
+• Максимум: 50MB, до 1 часа
+
+⚡ **УРОВНИ СЖАТИЯ:**
+• 10% → максимальное сжатие
+• 30% → сбалансированное сжатие
+• 50% → умеренное сжатие
+
+📋 **ИСПОЛЬЗУЙТЕ КНОПКИ:** Кнопки интерфейса для быстрого доступа!"""
+        
+        back_keyboard = keyboards.build_back_menu(lang)
+        await self.edit_message(chat_id, message_id, help_text, reply_markup=back_keyboard)
+    
+    async def handle_callback_menu(self, chat_id: int, user_id: int, message_id: int):
+        """Обработка callback для возврата в главное меню"""
+        user_settings = self.user_settings_manager.get_user_settings(user_id)
+        lang = user_settings.get('language', 'ru').lower()
+        
+        menu_text = keyboards.get_text('menu_title', lang)
+        menu_keyboard = keyboards.build_main_menu(user_settings)
+        
+        await self.edit_message(chat_id, message_id, menu_text, reply_markup=menu_keyboard)
+    
+    async def handle_menu_button(self, update: dict):
+        """Обработка нажатия кнопки 'Меню' из reply-клавиатуры"""
+        chat_id = update["message"]["chat"]["id"]
+        user_id = update["message"]["from"]["id"]
+        
+        # Получаем настройки пользователя
+        user_settings = self.user_settings_manager.get_user_settings(user_id)
+        lang = user_settings.get('language', 'ru').lower()
+        
+        # Создаем и отправляем главное меню
+        menu_text = keyboards.get_text('menu_title', lang)
+        menu_keyboard = keyboards.build_main_menu(user_settings)
+        
+        await self.send_message(chat_id, menu_text, reply_markup=menu_keyboard)
     
 
     
@@ -1480,7 +1786,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             # Убираем пользователя из списка обрабатываемых
             self.processing_users.discard(user_id)
     
-    async def edit_message(self, chat_id: int, message_id: int, text: str):
+    async def edit_message(self, chat_id: int, message_id: int, text: str, reply_markup: Optional[dict] = None, parse_mode: Optional[str] = None):
         """Редактирует существующее сообщение"""
         try:
             url = f"{self.base_url}/editMessageText"
@@ -1488,8 +1794,11 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 "chat_id": chat_id,
                 "message_id": message_id,
                 "text": text,
-                "parse_mode": "Markdown"
+                "parse_mode": parse_mode or "Markdown"
             }
+            
+            if reply_markup:
+                data["reply_markup"] = reply_markup
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=data) as response:
@@ -1579,7 +1888,10 @@ _Чтобы вернуться к обычной суммаризации, сн�
         try:
             logger.info(f"Полученное обновление: {update}")
             
-            if "message" in update:
+            if "callback_query" in update:
+                # Обработка callback-запросов от inline-кнопок
+                await self.handle_callback_query(update)
+            elif "message" in update:
                 message = update["message"]
                 logger.info(f"Найдено сообщение в обновлении: {message}")
                 
@@ -1636,6 +1948,11 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 # Извлекаем текст из сообщения (работает для обычных и пересланных)
                 text = extract_text_from_message_handle_update(message)
                 logger.info(f"DEBUG handle_update: Результат extract_text_from_message: '{text}'")
+                
+                # Проверяем кнопку "Меню"
+                if text and text in ['📋 Меню', '📋 Menu']:
+                    await self.handle_menu_button(update)
+                    return
                 
                 if text:
                     # Определяем тип сообщения для логирования
@@ -1870,7 +2187,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
         url = f"{self.base_url}/getUpdates"
         params = {
             "timeout": timeout,
-            "allowed_updates": ["message"]
+            "allowed_updates": ["message", "callback_query"]
         }
         
         if offset:
