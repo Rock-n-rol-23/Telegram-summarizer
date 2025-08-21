@@ -26,8 +26,6 @@ from youtube_processor import YouTubeProcessor
 from file_processor import FileProcessor
 from audio_processor import AudioProcessor
 from smart_summarizer import SmartSummarizer
-from ui_keyboards import keyboards, callback_parser
-from user_settings import UserSettingsManager
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -108,12 +106,6 @@ class SimpleTelegramBot:
         database_url = os.getenv('DATABASE_URL', 'sqlite:///bot_database.db')
         self.db = DatabaseManager(database_url)
         self.db.init_database()
-        
-        # Инициализация менеджера настроек пользователей
-        self.user_settings_manager = UserSettingsManager(self.db)
-        
-        # Хранение контекста последних сообщений для smart кнопки
-        self.user_last_context: Dict[int, dict] = {}
         
         # Инициализация YouTube процессора
         self.youtube_processor = YouTubeProcessor(groq_client=self.groq_client)
@@ -327,14 +319,19 @@ class SimpleTelegramBot:
         if parse_mode:
             data["parse_mode"] = parse_mode
         if reply_markup:
-            data["reply_markup"] = reply_markup  # без json.dumps
+            data["reply_markup"] = reply_markup  # Убираем json.dumps()
         
-        logger.info(f"📤 SEND_MESSAGE: Отправка сообщения в чат {chat_id}, reply_markup: {bool(reply_markup)}")
+        logger.info(f"📤 SEND_MESSAGE: Отправка сообщения в чат {chat_id}")
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=data) as response:
-                    result = await response.json()
+                # Используем json=data когда есть reply_markup, иначе data=data
+                if reply_markup:
+                    async with session.post(url, json=data) as response:
+                        result = await response.json()
+                else:
+                    async with session.post(url, data=data) as response:
+                        result = await response.json()
                         
                 if result.get("ok"):
                     logger.info(f"Сообщение успешно отправлено в чат {chat_id}")
@@ -427,40 +424,17 @@ class SimpleTelegramBot:
         """Обработка команды /start"""
         chat_id = update["message"]["chat"]["id"]
         user = update["message"]["from"]
-        user_id = user.get("id")
-        username = user.get("username", "")
         
-        logger.info(f"Обработка команды /start от пользователя {user_id} в чате {chat_id}")
+        logger.info(f"Обработка команды /start от пользователя {user.get('id')} в чате {chat_id}")
         
-        # Получаем настройки пользователя
-        user_settings = self.user_settings_manager.get_user_settings(user_id)
-        lang = user_settings.get('language', 'ru').lower()
+        # Очищаем любые пользовательские клавиатуры
+        await self.clear_custom_keyboards(chat_id)
         
-        # Отмечаем что пользователь завершил первое взаимодействие
-        if user_settings.get('first_interaction', True):
-            self.user_settings_manager.mark_first_interaction_complete(user_id)
-        
-        # Создаем reply-клавиатуру с кнопкой меню
-        reply_keyboard = keyboards.build_reply_keyboard(lang)
-        
-        # Создаем inline-клавиатуру с главным меню
-        inline_keyboard = keyboards.build_main_menu(user_settings)
-        
-        # Отправляем приветственное сообщение с обеими клавиатурами
-        await self.send_message(chat_id, WELCOME_MESSAGE_HTML, parse_mode="HTML", reply_markup=reply_keyboard)
-        
-        # Отправляем главное меню как отдельное сообщение с inline-кнопками
-        menu_text = keyboards.get_text('menu_title', lang)
-        await self.send_message(chat_id, menu_text, reply_markup=inline_keyboard)
+        await self.send_message(chat_id, WELCOME_MESSAGE_HTML, parse_mode="HTML")
     
     async def handle_help_command(self, update: dict):
         """Обработка команды /help"""
         chat_id = update["message"]["chat"]["id"]
-        user_id = update["message"]["from"]["id"]
-        
-        # Получаем настройки пользователя для языка
-        user_settings = self.user_settings_manager.get_user_settings(user_id)
-        lang = user_settings.get('language', 'ru').lower()
         
         help_text = """📖 Как использовать бота:
 
@@ -515,22 +489,23 @@ class SimpleTelegramBot:
 • Поддержка emoji и спецсимволов
 • Автосохранение ваших настроек сжатия
 • До 10 запросов в минуту
-• Работает на Llama 3.3 70B
-
-📋 **НОВЫЙ ИНТЕРФЕЙС:** Используйте кнопки внизу экрана для быстрого доступа ко всем функциям!"""
+• Работает на Llama 3.3 70B"""
         
-        # Добавляем кнопку "Назад в меню"
-        back_keyboard = keyboards.build_back_menu(lang)
-        await self.send_message(chat_id, help_text, reply_markup=back_keyboard)
+        await self.send_message(chat_id, help_text)
     
     async def handle_smart_mode_command(self, update: dict):
         """Обработка команды /smart - переключение в режим умной суммаризации"""
         chat_id = update["message"]["chat"]["id"]
         user_id = update["message"]["from"]["id"]
-        username = update["message"]["from"].get("username", "")
         
-        # Переключаем режим умной суммаризации через менеджер настроек
-        new_mode = self.user_settings_manager.toggle_smart_mode(user_id, username)
+        # Устанавливаем флаг умной суммаризации для пользователя
+        if user_id not in self.user_settings:
+            self.user_settings[user_id] = {}
+        
+        # Переключаем режим умной суммаризации
+        current_mode = self.user_settings[user_id].get("smart_mode", False)
+        self.user_settings[user_id]["smart_mode"] = not current_mode
+        new_mode = self.user_settings[user_id]["smart_mode"]
         
         if new_mode:
             mode_text = """🧠 **Умная суммаризация включена!**
@@ -557,12 +532,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
 
 Чтобы снова включить умную суммаризацию, нажмите /smart"""
 
-        # Получаем язык пользователя и добавляем кнопку возврата в меню
-        user_settings = self.user_settings_manager.get_user_settings(user_id)
-        lang = user_settings.get('language', 'ru').lower()
-        back_keyboard = keyboards.build_back_menu(lang)
-        
-        await self.send_message(chat_id, mode_text, reply_markup=back_keyboard)
+        await self.send_message(chat_id, mode_text)
         logger.info(f"Пользователь {user_id} {'включил' if new_mode else 'отключил'} умную суммаризацию")
     
     async def handle_stats_command(self, update: dict):
@@ -592,337 +562,38 @@ _Чтобы вернуться к обычной суммаризации, сн�
 
 📈 Используйте бота для обработки длинных текстов и статей!"""
         
-        # Получаем настройки пользователя для языка
-        user_settings = self.user_settings_manager.get_user_settings(user_id)
-        lang = user_settings.get('language', 'ru').lower()
-        
-        # Добавляем кнопку "Назад в меню"
-        back_keyboard = keyboards.build_back_menu(lang)
-        await self.send_message(chat_id, stats_text, reply_markup=back_keyboard)
+        await self.send_message(chat_id, stats_text)
 
     async def handle_compression_command(self, update: dict, compression_level: int):
         """Обработка команд уровня сжатия (/10, /30, /50 или 10%, 30%, 50%)"""
         chat_id = update["message"]["chat"]["id"]
         user_id = update["message"]["from"]["id"]
-        username = update["message"]["from"].get("username", "")
         
         try:
-            # Сохраняем новый уровень сжатия через менеджер настроек
-            success = self.user_settings_manager.set_compression_level(user_id, compression_level, username)
+            # Получаем username пользователя для логирования
+            username = update["message"]["from"].get("username", "")
             
-            if success:
-                # Получаем обновленные настройки и показываем меню
-                user_settings = self.user_settings_manager.get_user_settings(user_id)
-                lang = user_settings.get('language', 'ru').lower()
-                
-                compression_text = f"{compression_level}%"
-                confirmation_text = f"""✅ Уровень сжатия обновлен: {compression_text}
+            # Сохраняем новый уровень сжатия в базе данных
+            self.update_user_compression_level(user_id, compression_level, username)
+            
+            compression_text = f"{compression_level}%"
+            confirmation_text = f"""✅ Уровень сжатия обновлен: {compression_text}
 
-Теперь все ваши тексты будут суммаризированы с уровнем сжатия {compression_text}."""
-                
-                # Показываем обновленное меню с отмеченным активным уровнем
-                menu_keyboard = keyboards.build_main_menu(user_settings)
-                await self.send_message(chat_id, confirmation_text, reply_markup=menu_keyboard)
-                
-                logger.info(f"Пользователь {user_id} изменил уровень сжатия на {compression_level}%")
-            else:
-                await self.send_message(chat_id, "❌ Произошла ошибка при изменении настроек. Попробуйте еще раз.")
+Теперь все ваши тексты будут суммаризированы с уровнем сжатия {compression_text}.
+
+📝 Отправьте текст для суммаризации или используйте другие команды:
+• /10 → максимальное сжатие (10%)
+• /30 → сбалансированное сжатие (30%)  
+• /50 → умеренное сжатие (50%)
+• /help → справка
+• /stats → статистика"""
+            
+            await self.send_message(chat_id, confirmation_text)
+            logger.info(f"Пользователь {user_id} изменил уровень сжатия на {compression_level}%")
             
         except Exception as e:
             logger.error(f"Ошибка обработки команды сжатия {compression_level}% для пользователя {user_id}: {e}")
             await self.send_message(chat_id, "❌ Произошла ошибка при изменении настроек. Попробуйте еще раз.")
-    
-    async def handle_callback_query(self, update: dict):
-        """Обработка callback-запросов от inline-кнопок"""
-        callback_query = update.get("callback_query")
-        if not callback_query:
-            return
-        
-        # Отвечаем на callback для убирания индикатора загрузки
-        await self.answer_callback_query(callback_query["id"])
-        await asyncio.sleep(0)  # быстро вернуть управление
-        
-        user_id = callback_query["from"]["id"]
-        username = callback_query["from"].get("username", "")
-        chat_id = callback_query["message"]["chat"]["id"]
-        message_id = callback_query["message"]["message_id"]
-        callback_data = callback_query["data"]
-        
-        logger.info(f"Callback от пользователя {user_id}: {callback_data}")
-        
-        # Парсим callback_data
-        parsed = callback_parser.parse(callback_data)
-        action = parsed.get('action')
-        
-        try:
-            if action == 'smart':
-                await self.handle_callback_smart(chat_id, user_id, username, message_id)
-            
-            elif action == 'cmp':  # compression
-                level = int(parsed.get('sub', '30'))
-                await self.handle_callback_compression(chat_id, user_id, username, message_id, level)
-            
-            elif action == 'lang':  # language
-                sub_action = parsed.get('sub', '')
-                if sub_action == 'toggle':
-                    await self.handle_callback_language_toggle(chat_id, user_id, username, message_id)
-            
-            elif action == 'stats':
-                await self.handle_callback_stats(chat_id, user_id, message_id)
-            
-            elif action == 'help':
-                await self.handle_callback_help(chat_id, user_id, message_id)
-            
-            elif action == 'menu':
-                await self.handle_callback_menu(chat_id, user_id, message_id)
-            
-            else:
-                logger.warning(f"Неизвестный callback action: {action}")
-                
-        except Exception as e:
-            logger.error(f"Ошибка обработки callback {callback_data} от пользователя {user_id}: {e}")
-            await self.edit_message(
-                chat_id, message_id, 
-                "❌ Произошла ошибка при обработке запроса. Попробуйте еще раз."
-            )
-    
-    async def answer_callback_query(self, callback_query_id: str, text: str = None, show_alert: bool = False):
-        """Отвечает на callback_query"""
-        try:
-            url = f"{self.base_url}/answerCallbackQuery"
-            payload = {"callback_query_id": callback_query_id}
-            if text:
-                payload["text"] = text
-            if show_alert:
-                payload["show_alert"] = show_alert
-
-            logger.info(f"ANSWER_CALLBACK_QUERY: отправляю payload: {payload}")
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload) as response:
-                    result = await response.json()
-                    logger.info(f"ANSWER_CALLBACK_QUERY: {result}")
-                    return result
-        except Exception as e:
-            logger.error(f"Ошибка ответа на callback query: {e}")
-            return None
-    
-    async def handle_callback_smart(self, chat_id: int, user_id: int, username: str, message_id: int):
-        """Обработка callback для smart суммаризации"""
-        # Проверяем есть ли контекст для суммаризации
-        if user_id not in self.user_last_context:
-            user_settings = self.user_settings_manager.get_user_settings(user_id)
-            lang = user_settings.get('language', 'ru').lower()
-            
-            no_context_text = {
-                'ru': "🧠 Умная суммаризация\n\nПришлите текст, документ, ссылку или аудио, затем нажмите эту кнопку для интеллектуальной обработки.",
-                'en': "🧠 Smart Summary\n\nSend text, document, link or audio, then click this button for intelligent processing."
-            }.get(lang, "🧠 Пришлите контент для умной суммаризации.")
-            
-            menu_keyboard = keyboards.build_main_menu(user_settings)
-            await self.safe_update_menu(chat_id, message_id, no_context_text, menu_keyboard)
-            return
-        
-        # Если есть контекст, запускаем умную суммаризацию
-        context = self.user_last_context[user_id]
-        
-        processing_text = "🧠 Запускаю умную суммаризацию..."
-        await self.edit_message(chat_id, message_id, processing_text)
-        
-        # Здесь будет логика smart суммаризации
-        # Пока заглушка
-        await asyncio.sleep(1)
-        
-        result_text = "🧠 Умная суммаризация выполнена!\n\n[Результат будет здесь]"
-        user_settings = self.user_settings_manager.get_user_settings(user_id)
-        menu_keyboard = keyboards.build_main_menu(user_settings)
-        
-        await self.safe_update_menu(chat_id, message_id, result_text, menu_keyboard)
-    
-    async def handle_callback_compression(self, chat_id: int, user_id: int, username: str, message_id: int, level: int):
-        """Обработка callback для изменения уровня сжатия"""
-        current = self.user_settings_manager.get_user_settings(user_id).get('compression_level', 30)
-        updated = True
-        if level != current:
-            updated = self.user_settings_manager.set_compression_level(user_id, level, username)
-
-        user_settings = self.user_settings_manager.get_user_settings(user_id)
-        lang = user_settings.get('language', 'ru').lower()
-        menu_keyboard = keyboards.build_main_menu(user_settings)
-
-        confirmation_text = {
-            'ru': f"✅ Уровень сжатия: {level}%\n\n📋 Главное меню",
-            'en': f"✅ Compression level: {level}%\n\n📋 Main menu"
-        }.get(lang, f"✅ Уровень сжатия: {level}%")
-
-        await self.safe_update_menu(chat_id, message_id, confirmation_text, menu_keyboard)
-    
-    async def handle_callback_language_toggle(self, chat_id: int, user_id: int, username: str, message_id: int):
-        """Обработка callback для переключения языка"""
-        new_lang = self.user_settings_manager.toggle_language(user_id, username)
-        
-        user_settings = self.user_settings_manager.get_user_settings(user_id)
-        menu_keyboard = keyboards.build_main_menu(user_settings)
-        
-        confirmation_text = {
-            'ru': "✅ Язык изменен на русский\n\n📋 Главное меню",
-            'en': "✅ Language changed to English\n\n📋 Main menu"
-        }.get(new_lang, "✅ Язык изменен")
-        
-        await self.safe_update_menu(chat_id, message_id, confirmation_text, menu_keyboard)
-    
-    async def handle_callback_stats(self, chat_id: int, user_id: int, message_id: int):
-        """Обработка callback для показа статистики"""
-        try:
-            user_stats = self.db.get_user_stats(user_id)
-        except Exception as e:
-            logger.error(f"Ошибка получения статистики пользователя {user_id}: {e}")
-            user_stats = {
-                'total_requests': 0,
-                'total_chars': 0, 
-                'total_summary_chars': 0,
-                'avg_compression': 0,
-                'first_request': None
-            }
-        
-        user_settings = self.user_settings_manager.get_user_settings(user_id)
-        lang = user_settings.get('language', 'ru').lower()
-        
-        stats_text = f"""📊 {'Статистика' if lang == 'ru' else 'Statistics'}:
-
-• {'Обработано текстов' if lang == 'ru' else 'Processed texts'}: {user_stats['total_requests']}
-• {'Символов обработано' if lang == 'ru' else 'Characters processed'}: {user_stats['total_chars']:,}
-• {'Символов в саммари' if lang == 'ru' else 'Summary characters'}: {user_stats['total_summary_chars']:,}
-• {'Среднее сжатие' if lang == 'ru' else 'Average compression'}: {user_stats['avg_compression']:.1%}
-• {'Первый запрос' if lang == 'ru' else 'First request'}: {user_stats['first_request'] or ('Нет данных' if lang == 'ru' else 'No data')}"""
-        
-        back_keyboard = keyboards.build_back_menu(lang)
-        await self.safe_update_menu(chat_id, message_id, stats_text, back_keyboard)
-    
-    async def handle_callback_help(self, chat_id: int, user_id: int, message_id: int):
-        """Обработка callback для показа помощи"""
-        user_settings = self.user_settings_manager.get_user_settings(user_id)
-        lang = user_settings.get('language', 'ru').lower()
-        
-        if lang == 'en':
-            help_text = """📖 How to use the bot:
-
-🔥 **QUICK SUMMARIZATION:**
-• Send text → get 30% compression
-• Forward a message → automatic processing
-
-🔗 **WEB PAGE SUMMARIZATION:**
-• Send article link → get brief summary
-• Support: news sites, blogs, articles
-
-🎥 **YOUTUBE VIDEO SUMMARIZATION:**  
-• Send YouTube link → video summary
-• Extract subtitles and description
-• Up to 2 hours duration
-
-📄 **DOCUMENT SUMMARIZATION:**
-• Attach file → get structured summary
-• Formats: PDF, DOCX, DOC, TXT, PPTX
-• Max size: 20MB
-
-🎵 **AUDIO SUMMARIZATION:**
-• Send audio/voice → speech summary
-• Formats: MP3, WAV, M4A, OGG, etc
-• Max: 50MB, up to 1 hour
-
-⚡ **COMPRESSION LEVELS:**
-• 10% → maximum compression
-• 30% → balanced compression  
-• 50% → moderate compression
-
-📋 **USE BUTTONS:** Use interface buttons for quick access!"""
-        else:
-            help_text = """📖 Как использовать бота:
-
-🔥 **БЫСТРАЯ СУММАРИЗАЦИЯ:**
-• Отправьте текст → получите сжатие 30%
-• Перешлите сообщение → автоматическая обработка
-
-🔗 **СУММАРИЗАЦИЯ ВЕБ-СТРАНИЦ:**
-• Отправьте ссылку на статью → получите краткое резюме
-• Поддержка: новостные сайты, блоги, статьи
-
-🎥 **СУММАРИЗАЦИЯ YOUTUBE:**
-• Отправьте ссылку на YouTube → резюме видео
-• Извлечение субтитров и описания
-• До 2 часов длительности
-
-📄 **СУММАРИЗАЦИЯ ДОКУМЕНТОВ:**
-• Прикрепите файл → получите резюме
-• Форматы: PDF, DOCX, DOC, TXT, PPTX
-• Максимум: 20MB
-
-🎵 **СУММАРИЗАЦИЯ АУДИО:**
-• Отправьте аудио/голосовое → резюме речи
-• Форматы: MP3, WAV, M4A, OGG и др.
-• Максимум: 50MB, до 1 часа
-
-⚡ **УРОВНИ СЖАТИЯ:**
-• 10% → максимальное сжатие
-• 30% → сбалансированное сжатие
-• 50% → умеренное сжатие
-
-📋 **ИСПОЛЬЗУЙТЕ КНОПКИ:** Кнопки интерфейса для быстрого доступа!"""
-        
-        back_keyboard = keyboards.build_back_menu(lang)
-        await self.safe_update_menu(chat_id, message_id, help_text, back_keyboard)
-    
-    async def handle_callback_menu(self, chat_id: int, user_id: int, message_id: int):
-        """Обработка callback для возврата в главное меню"""
-        user_settings = self.user_settings_manager.get_user_settings(user_id)
-        lang = user_settings.get('language', 'ru').lower()
-        
-        menu_text = keyboards.get_text('menu_title', lang)
-        menu_keyboard = keyboards.build_main_menu(user_settings)
-        
-        await self.safe_update_menu(chat_id, message_id, menu_text, menu_keyboard)
-    
-    async def edit_message_reply_markup(self, chat_id: int, message_id: int, reply_markup: dict):
-        """Редактирует только клавиатуру сообщения"""
-        url = f"{self.base_url}/editMessageReplyMarkup"
-        payload = {
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "reply_markup": reply_markup,  # без json.dumps
-        }
-        logger.info(f"EDIT_MESSAGE_REPLY_MARKUP: chat_id={chat_id}, message_id={message_id}")
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload) as response:
-                    result = await response.json()
-                    logger.info(f"editMessageReplyMarkup: {result}")
-                    return result
-        except Exception as e:
-            logger.error(f"editMessageReplyMarkup exception: {e}")
-            return None
-    
-    async def safe_update_menu(self, chat_id: int, message_id: int, text: str, menu_keyboard: dict):
-        """Безопасное обновление меню с fallback на клавиатуру"""
-        # Сначала попробуем заменить текст + клавиатуру
-        res = await self.edit_message(chat_id, message_id, text, reply_markup=menu_keyboard, parse_mode=None)
-        if not res or not res.get("ok"):
-            # Если текст не изменился или была ошибка парсинга — хотя бы обновим клавиатуру
-            await self.edit_message_reply_markup(chat_id, message_id, menu_keyboard)
-    
-    async def handle_menu_button(self, update: dict):
-        """Обработка нажатия кнопки 'Меню' из reply-клавиатуры"""
-        chat_id = update["message"]["chat"]["id"]
-        user_id = update["message"]["from"]["id"]
-        
-        # Получаем настройки пользователя
-        user_settings = self.user_settings_manager.get_user_settings(user_id)
-        lang = user_settings.get('language', 'ru').lower()
-        
-        # Создаем и отправляем главное меню
-        menu_text = keyboards.get_text('menu_title', lang)
-        menu_keyboard = keyboards.build_main_menu(user_settings)
-        
-        await self.send_message(chat_id, menu_text, reply_markup=menu_keyboard)
     
 
     
@@ -1809,67 +1480,23 @@ _Чтобы вернуться к обычной суммаризации, сн�
             # Убираем пользователя из списка обрабатываемых
             self.processing_users.discard(user_id)
     
-    async def edit_message(
-        self,
-        chat_id: int,
-        message_id: int,
-        text: str,
-        reply_markup: Optional[dict] = None,
-        parse_mode: Optional[str] = None,
-        disable_web_page_preview: bool = True,
-    ):
-        """
-        Редактирует существующее сообщение. Умеет:
-        - задавать parse_mode (Markdown/HTML)
-        - прикреплять inline/reply клавиатуру
-        - аккуратно падать на ошибке парсинга и повторять без форматирования
-        """
-        if not message_id:
-            return
-
-        url = f"{self.base_url}/editMessageText"
-
-        def make_payload(pm: Optional[str]):
-            payload = {
+    async def edit_message(self, chat_id: int, message_id: int, text: str):
+        """Редактирует существующее сообщение"""
+        try:
+            url = f"{self.base_url}/editMessageText"
+            data = {
                 "chat_id": chat_id,
                 "message_id": message_id,
-                "text": text[:4096],
+                "text": text,
+                "parse_mode": "Markdown"
             }
-            if pm:
-                payload["parse_mode"] = pm
-            if disable_web_page_preview:
-                payload["disable_web_page_preview"] = True
-            if reply_markup:
-                payload["reply_markup"] = reply_markup  # без json.dumps
-            return payload
-
-        # 1) если parse_mode явно задан — пробуем с ним; иначе попробуем Markdown, потом без форматирования
-        try_order = [parse_mode] if parse_mode else ["Markdown", None]
-
-        async with aiohttp.ClientSession() as session:
-            last_result = None
-            for pm in try_order:
-                payload = make_payload(pm)
-                async with session.post(url, json=payload) as resp:
-                    raw = await resp.text()
-                    try:
-                        import json
-                        result = json.loads(raw)
-                    except Exception:
-                        logger.error(f"editMessageText non-JSON response: {raw}")
-                        return None
-
-                    last_result = result
-                    # Если «can't parse entities» — пробуем следующий режим
-                    if (not result.get("ok")) and ("can't parse entities" in result.get("description", "")):
-                        logger.info("Повторная отправка editMessageText без форматирования")
-                        continue
-                    return result
-
-            # Если все попытки не удались — вернём последний ответ
-            if last_result and not last_result.get("ok"):
-                logger.warning(f"Не удалось отредактировать сообщение: {last_result}")
-            return last_result
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data) as response:
+                    return await response.json()
+        except Exception as e:
+            logger.error(f"Ошибка редактирования сообщения: {e}")
+            return None
     
     async def summarize_file_content(self, text: str, file_name: str = "", file_type: str = "", compression_ratio: float = 0.3) -> str:
         """Создает резюме содержимого файла через Groq API"""
@@ -1952,10 +1579,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
         try:
             logger.info(f"Полученное обновление: {update}")
             
-            if "callback_query" in update:
-                # Обработка callback-запросов от inline-кнопок
-                await self.handle_callback_query(update)
-            elif "message" in update:
+            if "message" in update:
                 message = update["message"]
                 logger.info(f"Найдено сообщение в обновлении: {message}")
                 
@@ -2012,11 +1636,6 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 # Извлекаем текст из сообщения (работает для обычных и пересланных)
                 text = extract_text_from_message_handle_update(message)
                 logger.info(f"DEBUG handle_update: Результат extract_text_from_message: '{text}'")
-                
-                # Проверяем кнопку "Меню"
-                if text and text in ['📋 Меню', '📋 Menu']:
-                    await self.handle_menu_button(update)
-                    return
                 
                 if text:
                     # Определяем тип сообщения для логирования
@@ -2248,14 +1867,13 @@ _Чтобы вернуться к обычной суммаризации, сн�
     
     async def get_updates(self, offset = None, timeout: int = 30):
         """Получение обновлений от Telegram"""
-        import json
         url = f"{self.base_url}/getUpdates"
         params = {
             "timeout": timeout,
-            "allowed_updates": json.dumps(["message", "callback_query"])
+            "allowed_updates": ["message"]
         }
         
-        if offset is not None:
+        if offset:
             params["offset"] = offset
         
         logger.info(f"🔄 GET_UPDATES: Запрос обновлений с offset={offset}, timeout={timeout}")
@@ -2856,6 +2474,46 @@ _Чтобы вернуться к обычной суммаризации, сн�
         finally:
             # Удаляем пользователя из списка обрабатываемых
             self.processing_users.discard(user_id)
+
+    async def edit_message(self, chat_id: int, message_id: int, text: str):
+        """Редактирование существующего сообщения"""
+        if not message_id:
+            return
+            
+        url = f"{self.base_url}/editMessageText"
+        
+        # Сначала пробуем с Markdown форматированием
+        data = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text[:4096],
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data) as response:
+                    result = await response.json()
+                    
+                    # Если ошибка парсинга - пробуем без форматирования
+                    if not result.get("ok") and "can't parse entities" in result.get("description", ""):
+                        logger.info("Повторная отправка без Markdown форматирования")
+                        data_plain = {
+                            "chat_id": chat_id,
+                            "message_id": message_id,
+                            "text": text[:4096],
+                            "disable_web_page_preview": True
+                        }
+                        async with session.post(url, json=data_plain) as response_plain:
+                            result = await response_plain.json()
+                    
+                    if not result.get("ok"):
+                        logger.warning(f"Не удалось отредактировать сообщение: {result}")
+                    return result
+        except Exception as e:
+            logger.error(f"Ошибка редактирования сообщения: {e}")
+            return None
 
 async def main():
     """Главная функция"""
