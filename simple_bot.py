@@ -327,20 +327,14 @@ class SimpleTelegramBot:
         if parse_mode:
             data["parse_mode"] = parse_mode
         if reply_markup:
-            import json as _json
-            data["reply_markup"] = _json.dumps(reply_markup)
+            data["reply_markup"] = reply_markup  # без json.dumps
         
         logger.info(f"📤 SEND_MESSAGE: Отправка сообщения в чат {chat_id}, reply_markup: {bool(reply_markup)}")
         
         try:
             async with aiohttp.ClientSession() as session:
-                # Используем json=data когда есть reply_markup, иначе data=data
-                if reply_markup:
-                    async with session.post(url, json=data) as response:
-                        result = await response.json()
-                else:
-                    async with session.post(url, data=data) as response:
-                        result = await response.json()
+                async with session.post(url, json=data) as response:
+                    result = await response.json()
                         
                 if result.get("ok"):
                     logger.info(f"Сообщение успешно отправлено в чат {chat_id}")
@@ -891,15 +885,12 @@ _Чтобы вернуться к обычной суммаризации, сн�
     async def edit_message_reply_markup(self, chat_id: int, message_id: int, reply_markup: dict):
         """Редактирует только клавиатуру сообщения"""
         url = f"{self.base_url}/editMessageReplyMarkup"
-        import json as _json
         payload = {
             "chat_id": chat_id,
             "message_id": message_id,
-            "reply_markup": _json.dumps(reply_markup)
+            "reply_markup": reply_markup,  # без json.dumps
         }
-        
-        logger.info(f"EDIT_MESSAGE_REPLY_MARKUP: отправляю payload chat_id={chat_id}, message_id={message_id}")
-        
+        logger.info(f"EDIT_MESSAGE_REPLY_MARKUP: chat_id={chat_id}, message_id={message_id}")
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=payload) as response:
@@ -1818,29 +1809,49 @@ _Чтобы вернуться к обычной суммаризации, сн�
             # Убираем пользователя из списка обрабатываемых
             self.processing_users.discard(user_id)
     
-    async def edit_message(self, chat_id: int, message_id: int, text: str,
-                           reply_markup: Optional[dict] = None,
-                           parse_mode: Optional[str] = None):
-        """Редактирует существующее сообщение"""
-        url = f"{self.base_url}/editMessageText"
-        payload = {
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": text
-        }
-        if parse_mode:
-            payload["parse_mode"] = parse_mode
-        if reply_markup:
-            # Telegram нормально понимает объект в JSON, но сериализация гарантирует корректность
-            import json as _json
-            payload["reply_markup"] = _json.dumps(reply_markup)
+    async def edit_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        reply_markup: Optional[dict] = None,
+        parse_mode: Optional[str] = None,
+        disable_web_page_preview: bool = True,
+    ):
+        """
+        Редактирует существующее сообщение. Умеет:
+        - задавать parse_mode (Markdown/HTML)
+        - прикреплять inline/reply клавиатуру
+        - аккуратно падать на ошибке парсинга и повторять без форматирования
+        """
+        if not message_id:
+            return
 
-        logger.info(f"EDIT_MESSAGE_TEXT: отправляю payload chat_id={chat_id}, message_id={message_id}")
-        
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload) as response:
-                    raw = await response.text()
+        url = f"{self.base_url}/editMessageText"
+
+        def make_payload(pm: Optional[str]):
+            payload = {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text[:4096],
+            }
+            if pm:
+                payload["parse_mode"] = pm
+            if disable_web_page_preview:
+                payload["disable_web_page_preview"] = True
+            if reply_markup:
+                payload["reply_markup"] = reply_markup  # без json.dumps
+            return payload
+
+        # 1) если parse_mode явно задан — пробуем с ним; иначе попробуем Markdown, потом без форматирования
+        try_order = [parse_mode] if parse_mode else ["Markdown", None]
+
+        async with aiohttp.ClientSession() as session:
+            last_result = None
+            for pm in try_order:
+                payload = make_payload(pm)
+                async with session.post(url, json=payload) as resp:
+                    raw = await resp.text()
                     try:
                         import json
                         result = json.loads(raw)
@@ -1848,14 +1859,17 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         logger.error(f"editMessageText non-JSON response: {raw}")
                         return None
 
-                    if not result.get("ok"):
-                        logger.error(f"editMessageText error: {result}")
-                    else:
-                        logger.info(f"editMessageText ok: {result.get('result', {}).get('message_id')}")
+                    last_result = result
+                    # Если «can't parse entities» — пробуем следующий режим
+                    if (not result.get("ok")) and ("can't parse entities" in result.get("description", "")):
+                        logger.info("Повторная отправка editMessageText без форматирования")
+                        continue
                     return result
-        except Exception as e:
-            logger.error(f"editMessageText exception: {e}")
-            return None
+
+            # Если все попытки не удались — вернём последний ответ
+            if last_result and not last_result.get("ok"):
+                logger.warning(f"Не удалось отредактировать сообщение: {last_result}")
+            return last_result
     
     async def summarize_file_content(self, text: str, file_name: str = "", file_type: str = "", compression_ratio: float = 0.3) -> str:
         """Создает резюме содержимого файла через Groq API"""
@@ -2842,46 +2856,6 @@ _Чтобы вернуться к обычной суммаризации, сн�
         finally:
             # Удаляем пользователя из списка обрабатываемых
             self.processing_users.discard(user_id)
-
-    async def edit_message(self, chat_id: int, message_id: int, text: str):
-        """Редактирование существующего сообщения"""
-        if not message_id:
-            return
-            
-        url = f"{self.base_url}/editMessageText"
-        
-        # Сначала пробуем с Markdown форматированием
-        data = {
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": text[:4096],
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": True
-        }
-        
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=data) as response:
-                    result = await response.json()
-                    
-                    # Если ошибка парсинга - пробуем без форматирования
-                    if not result.get("ok") and "can't parse entities" in result.get("description", ""):
-                        logger.info("Повторная отправка без Markdown форматирования")
-                        data_plain = {
-                            "chat_id": chat_id,
-                            "message_id": message_id,
-                            "text": text[:4096],
-                            "disable_web_page_preview": True
-                        }
-                        async with session.post(url, json=data_plain) as response_plain:
-                            result = await response_plain.json()
-                    
-                    if not result.get("ok"):
-                        logger.warning(f"Не удалось отредактировать сообщение: {result}")
-                    return result
-        except Exception as e:
-            logger.error(f"Ошибка редактирования сообщения: {e}")
-            return None
 
 async def main():
     """Главная функция"""
