@@ -1,0 +1,161 @@
+Цель.
+
+Убрать ImportError: cannot import name 'is_audio_document' from 'utils.tg_audio'.
+
+Обеспечить корректный роутинг: если в сообщении document и это не аудио, то передавать в handle_document_message (PDF, сканы, презентации .pptx, DOC/DOCX/TXT, изображения для OCR).
+
+Не ломать текущую обработку аудио (voice, audio, video_note) и аудио-файлов в document.
+
+Контекст/факты.
+
+Ошибка возникает в simple_bot.py при импорте is_audio_document из utils.tg_audio.
+
+В проекте есть полноценная обработка документов: file_processor.py (pdfplumber/PyPDF2 + PyMuPDF + OCR через Tesseract при наличии), а также content_extraction/pdf_ocr.py и content_extraction/pptx_extractor.py.
+
+В pyproject.toml зависимости (pymupdf, pdfplumber, python-pptx, pytesseract, Pillow) уже добавлены.
+
+Надо просто корректно отличать аудио-документы от обычных документов, чтобы не уводить PDF в аудио-пайплайн.
+
+Изменения по файлам
+1) utils/tg_audio.py — добавить детектор аудио-документов
+
+В конец файла добавь функцию is_audio_document:
+
+# utils/tg_audio.py
+
+from typing import Dict
+
+def is_audio_document(doc: Dict) -> bool:
+    """
+    Определяет, является ли telegram 'document' аудио-файлом.
+    Смотрим на mime_type и расширение имени файла.
+    Возвращает True только для аудио; иначе False.
+    """
+    try:
+        mime = (doc.get("mime_type") or "").lower()
+        name = (doc.get("file_name") or "").lower()
+
+        # Явные звуки по MIME
+        if mime.startswith("audio/"):
+            return True
+
+        # Телеграм иногда присылает audio как application/octet-stream
+        audio_exts = {
+            ".mp3", ".m4a", ".aac", ".flac", ".wav",
+            ".ogg", ".oga", ".opus", ".amr", ".wma", ".mka"
+        }
+        if name and any(name.endswith(ext) for ext in audio_exts):
+            return True
+
+        return False
+    except Exception:
+        # Если сомневаемся — считаем НЕ аудио, чтобы не ломать обработку документов
+        return False
+
+
+Примечание: импорт Dict у тебя уже есть выше; если нет — оставь, как в примере.
+
+2) simple_bot.py — привести импорты к единому виду и не дублировать
+
+Найди блок импортов из utils.tg_audio и замени на единый:
+
+# simple_bot.py (вверху файла, рядом с остальными импортами)
+from utils.tg_audio import (
+    extract_audio_descriptor,
+    get_audio_info_text,
+    format_duration,
+    is_audio_document,
+)
+
+
+Далее, удали локальные импорты внутри методов наподобие:
+
+# УДАЛИТЬ эту строку внутри handle_update:
+from utils.tg_audio import is_audio_document
+
+
+и дублирующие импорты format_duration. В коде дальше используй уже импортированные сверху символы.
+
+3) Логика роутинга документов — оставить, но немного усилить логи
+
+В месте, где ты проверяешь elif "document" in message:, добавь короткий лог, чтобы было видно решение детектора:
+
+# simple_bot.py (внутри handle_update, в ветке elif "document" in message:)
+doc = message["document"]
+is_audio = is_audio_document(doc)
+logger.info(f"DEBUG: document '{doc.get('file_name')}' mime='{doc.get('mime_type')}' -> is_audio={is_audio}")
+
+if is_audio:
+    if ("forward_from" in message) or ("forward_from_chat" in message) or ("forward_origin" in message):
+        logger.info("Пересланный аудио документ без текста — направляю в handle_audio_message")
+    await self.handle_audio_message(update)
+else:
+    # Обработка документов (PDF, DOCX, DOC, TXT, PPTX; сканы через OCR)
+    await self.handle_document_message(update)
+return
+
+
+Эта строка лога поможет быстро понять, почему конкретный файл пошёл в аудио или в документы.
+
+4) (Опционально) Расширить поддержку входящих «документов»-картинок под OCR
+
+Если ещё не сделано, в file_processor.FileProcessor.__init__ оставь/проверь, что при HAS_ENHANCED_PDF_SUPPORT включены OCR для изображений:
+
+# file_processor.py (у тебя уже есть подобный код — просто убедись)
+base_formats = ['.pdf', '.docx', '.doc', '.txt']
+if HAS_PPTX_SUPPORT:
+    base_formats.append('.pptx')
+if HAS_ENHANCED_PDF_SUPPORT:
+    base_formats.extend(['.png', '.jpg', '.jpeg'])  # OCR для изображений
+self.supported_extensions = base_formats
+
+
+Это позволит обрабатывать сканы, присланные как обычные картинки (например, фото страницы), через extract_text_from_image() → pytesseract.
+
+Проверки (acceptance criteria)
+
+Регресс-фейл устранён.
+При пересланном PDF (пример из лога: Scrum-Guide-RUS.pdf) бот не падает на импорте и не уходит в аудио-ветку, а вызывает handle_document_message.
+В логе видно:
+
+DEBUG: document 'Scrum-Guide-RUS.pdf' mime='application/pdf' -> is_audio=False
+
+📄 Обрабатываю документ: Scrum-Guide-RUS.pdf …
+
+Дальше — шаги скачивания и извлечения текста (pdfplumber/PyMuPDF/OCR), как в текущей реализации.
+
+Аудио-файлы как document (например, voice.m4a, recording.mp3, audio.ogg) правильно уходят в handle_audio_message, даже если mime_type = application/octet-stream, благодаря проверке по расширению.
+
+Пересланные и «из устройства» документы отрабатывают одинаково: PDF (текстовые и сканы), .pptx презентации, DOC/DOCX/TXT и изображения (.png/.jpg/.jpeg) с OCR.
+
+Ничего из существующего не сломано: обработка voice, audio, video_note работает как прежде.
+
+Подсказки по окружению (без изменений кода)
+
+Для лучшего OCR проверь наличие системных пакетов Tesseract и языков:
+
+Debian/Ubuntu: tesseract-ocr, tesseract-ocr-rus, tesseract-ocr-eng.
+
+На Railway/Nixpacks можно добавить соответствующие пакеты через конфиг сборки.
+
+Переменные окружения, которые уже поддерживает код:
+
+OCR_LANGS (по умолчанию "rus+eng")
+
+PDF_OCR_DPI (по умолчанию 200)
+
+MAX_PAGES_OCR (например, 50)
+
+Быстрый самотест is_audio_document
+
+Добавь простой тест, чтобы не регрессировать в будущем:
+
+# tests/test_tg_audio.py
+from utils.tg_audio import is_audio_document
+
+def test_is_audio_document():
+    assert is_audio_document({"mime_type": "audio/mpeg", "file_name": "a.mp3"})
+    assert is_audio_document({"mime_type": "application/octet-stream", "file_name": "a.ogg"})
+    assert not is_audio_document({"mime_type": "application/pdf", "file_name": "doc.pdf"})
+    assert not is_audio_document({"mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation", "file_name": "slides.pptx"})
+    assert not is_audio_document({"mime_type": "", "file_name": "report.pdf"})
