@@ -17,8 +17,9 @@ import aiohttp
 import sqlite3
 from groq import Groq
 from dotenv import load_dotenv
-import requests
 from bs4 import BeautifulSoup
+from utils.network import safe_get, SSRFError, RateLimitError
+from utils.telegram import split_message, format_summary_message, format_error_message
 import validators
 from urllib.parse import urlparse
 # from readability import parse  # Убрано из-за проблем с установкой
@@ -176,32 +177,25 @@ class SimpleTelegramBot:
         
         return valid_urls
     
-    def extract_webpage_content(self, url: str, timeout: int = 30) -> dict:
-        """Извлекает основной текст с веб-страницы"""
+    async def extract_webpage_content(self, url: str, user_id: int = 0, timeout: int = 30) -> dict:
+        """Извлекает основной текст с веб-страницы с защитой от SSRF"""
         try:
-            # Расширенные заголовки для лучшего обхода блокировок
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache'
-            }
+            # Загрузка страницы с защитой от SSRF
+            content, status = await safe_get(url, user_id=user_id)
             
-            # Загрузка страницы с увеличенным timeout для медленных сайтов
-            response = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-            response.raise_for_status()
-            
-            # Проверка размера контента (максимум 5MB)
-            if len(response.content) > 5 * 1024 * 1024:
-                raise Exception("Файл слишком большой для обработки")
+            if status != 200:
+                error_msg = {
+                    403: 'Доступ запрещен (сайт блокирует ботов)',
+                    404: 'Страница не найдена',
+                    429: 'Слишком много запросов (сайт временно ограничил доступ)',
+                    500: 'Внутренняя ошибка сервера',
+                    502: 'Плохой шлюз',
+                    503: 'Сервис временно недоступен'
+                }.get(status, f'Ошибка HTTP {status}')
+                return {'success': False, 'error': error_msg}
             
             # Парсинг HTML
-            soup = BeautifulSoup(response.content, 'lxml')
+            soup = BeautifulSoup(content, 'html.parser')
             
             # Получение заголовка страницы
             title_tag = soup.find('title')
@@ -215,7 +209,7 @@ class SimpleTelegramBot:
                 '_cf_chl_opt', 'cf-browser-verification'
             ]
             
-            page_text = response.text.lower()
+            page_text = content.lower()
             if any(indicator in page_text for indicator in cloudflare_indicators):
                 return {
                     'success': False,
@@ -270,21 +264,10 @@ class SimpleTelegramBot:
                 'success': True
             }
             
-        except requests.exceptions.Timeout:
-            return {'success': False, 'error': 'Время ожидания истекло (сайт отвечает слишком медленно)'}
-        except requests.exceptions.ConnectionError:
-            return {'success': False, 'error': 'Не удается подключиться к сайту (проверьте URL или доступность сайта)'}
-        except requests.exceptions.HTTPError as e:
-            status_code = e.response.status_code if e.response else 'неизвестный'
-            error_msg = {
-                403: 'Доступ запрещен (сайт блокирует ботов)',
-                404: 'Страница не найдена',
-                429: 'Слишком много запросов (сайт временно ограничил доступ)',
-                500: 'Внутренняя ошибка сервера',
-                502: 'Плохой шлюз',
-                503: 'Сервис временно недоступен'
-            }.get(status_code, f'Ошибка HTTP {status_code}')
-            return {'success': False, 'error': error_msg}
+        except SSRFError as e:
+            return {'success': False, 'error': f'Безопасность: {str(e)}', 'ssrf_blocked': True}
+        except RateLimitError as e:
+            return {'success': False, 'error': 'Превышен лимит запросов. Попробуйте позже', 'rate_limited': True}
         except Exception as e:
             return {'success': False, 'error': f'Ошибка при обработке: {str(e)[:100]}...'}
     

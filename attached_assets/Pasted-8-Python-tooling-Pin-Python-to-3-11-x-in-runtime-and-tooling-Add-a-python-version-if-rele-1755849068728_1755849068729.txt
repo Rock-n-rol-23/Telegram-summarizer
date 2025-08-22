@@ -1,0 +1,54 @@
+8) Python & tooling:
+   - Pin Python to 3.11.x in runtime and tooling. Add a .python-version if relevant.
+   - Add pre-commit with ruff + black (auto-fix), run on CI.
+
+9) Env & secrets safety:
+   - Introduce .env.example; ensure real .env is gitignored.
+   - Add a startup validator that fails fast if required env vars are missing (TELEGRAM_BOT_TOKEN, GROQ_API_KEY, DB_URL, etc).
+
+10) Logging & observability:
+   - Switch logs to structured JSON (one-line per event) with request-id / user-id, levels, and durations.
+   - Add /ready and /live endpoints; keep /health.
+   - Log and surface external-call timings (web fetch, OCR, LLM).
+
+11) Rate limits & backoff:
+   - Add aiolimiter-based per-user and global QPS limits.
+   - Wrap external calls with exponential backoff (handling 429/5xx) + circuit breaker for flaky endpoints.
+
+12) Security hardening:
+   - Add MIME sniffing (python-magic) and strict file type allowlist for uploads.
+   - Cap file sizes (e.g., 25 MB global, 2 MB for images-to-OCR unless explicitly allowed).
+   - Verify Telegram webhook secret token (if webhook mode is enabled).
+   - Sanitize Markdown/HTML to prevent Telegram parse issues.
+
+13) Feature flags:
+   - Introduce env-based flags to toggle heavy features (OCR, YouTube, PDF rendering) without code changes.
+
+14) Summarization pipeline robustness:
+   - Add language detection (lightweight, e.g., langdetect) → choose Russian/English heuristics (razdel, sentence split).
+   - Chunk long texts for LLMs with overlap; merge summaries (map-reduce style).
+   - Add a numeric-consistency pass: preserve numbers/dates/percents verbatim where possible.
+
+15) YouTube & web extraction QoL:
+   - For YouTube prefer transcripts via youtube-transcript-api, fallback to yt-dlp only when needed; enforce duration/timeouts.
+   - Web: dual extractor (trafilatura → readability) with quality scoring; drop pages with too little text.
+
+16) Background work & UX:
+   - For long jobs (OCR, big PDFs, YouTube) run as asyncio tasks; immediately ack user with a “processing” reply and progress updates (edit message or follow-ups).
+   - Auto-split outgoing messages to ≤4096 chars; centralize Telegram send helper.
+
+17) Temp files & retention:
+   - Store temps in /tmp (container) or a dedicated data dir; auto-clean files older than N hours on startup and periodically.
+
+18) DB & migrations:
+   - Add lightweight migrations (alembic) for PostgreSQL path.
+   - Wrap DB ops in transactions; add simple repository layer with retries on transient errors.
+
+19) Tests & CI:
+   - Add pytest suite: unit (SSRF guard, chunking, lang detect), and one smoke test (URL → extract → summarize → chunk).
+   - Mock network/LLM; optionally use VCR.py for web fixtures.
+   - Add GitHub Actions workflow: lint, tests, build Docker image.
+
+20) Docs:
+   - Update README with setup, env vars, feature flags, limits, and known constraints.
+   - Add a brief “operational runbook” (how to rotate keys, change rate limits, enable/disable features).

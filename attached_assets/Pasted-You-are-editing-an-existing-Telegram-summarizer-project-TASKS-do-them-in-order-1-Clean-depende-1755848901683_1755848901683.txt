@@ -1,0 +1,42 @@
+You are editing an existing Telegram summarizer project.
+
+TASKS (do them in order):
+1) Clean dependencies:
+   - Open pyproject.toml.
+   - Remove the package "telegram" (version 0.0.1).
+   - Completely delete the entire [tool.uv.sources] section.
+   - Ensure these deps are present: aiohttp, flask, python-dotenv, validators, beautifulsoup4, trafilatura, readability-lxml, pymupdf, pdfplumber, pytesseract, pillow, imageio-ffmpeg, yt-dlp, groq, sumy, razdel, natasha.
+   - If we use raw Telegram Bot API via aiohttp, REMOVE python-telegram-bot. If we actually use PTB’s dispatcher, KEEP it and refactor all HTTP calls to PTB methods.
+   - Run a dependency lock/update.
+
+2) Dockerfile:
+   - Add installation of tesseract-ocr, tesseract-ocr-rus, tesseract-ocr-eng.
+   - Keep ffmpeg.
+   - Leave CMD ["python", "main_entrypoint.py"] as is.
+   - Build the image locally to verify packages install fast and successfully.
+
+3) Network stack unification:
+   - Replace any usage of requests with aiohttp (create one shared ClientSession with timeouts and retries).
+   - Add global timeouts for web downloads (connect/read total ≤ 30–60s) and max payload size limits (≤ 10 MB).
+   - Implement SSRF guard that blocks private/loopback/link-local IPs and non-http(s) schemes.
+   - Write unit tests for the SSRF guard with several URLs (public vs private).
+
+4) Telegram output:
+   - Implement function to split long messages to 4096-char chunks and escape Markdown where needed.
+   - Use this function for every textual reply.
+   - Add simple in-memory rate limiter per user (MAX_REQUESTS_PER_MINUTE from config).
+
+5) OCR and PDFs:
+   - Verify PDF OCR path: if PyMuPDF text is empty → run pytesseract with installed languages. Add logging when OCR is triggered.
+   - Add a small e2e test using a scanned PDF sample (mock or fixture).
+
+6) Database:
+   - For PostgreSQL path: add psycopg2 connection pool and explicit transactions.
+   - For SQLite path: enable WAL mode and put any caches (web_cache.db) to /tmp or a configurable data directory.
+   - Add health check method that pings DB on startup and logs availability.
+
+7) Optional:
+   - If running on Cloud Run, consider webhook mode (expose /webhook) instead of long polling. Otherwise, ensure long polling runs in a dedicated task, non-blocking the Flask server.
+   - Switch Flask dev server to gunicorn in production (if environment var USE_GUNICORN=1 set): `gunicorn -w 2 -b 0.0.0.0:$PORT main_entrypoint:app`.
+
+Make small, atomic commits per task with clear messages. After changes, run tests.
