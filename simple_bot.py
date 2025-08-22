@@ -27,6 +27,17 @@ from file_processor import FileProcessor
 from audio_processor import AudioProcessor
 from smart_summarizer import SmartSummarizer
 
+# Настройка логирования (должно быть раньше всех импортов)
+import logging
+import sys
+
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
+
 # Импорт интегрированной системы суммаризации
 try:
     from integrated_summarizer import IntegratedSummarizer, get_integrated_summarizer
@@ -39,16 +50,7 @@ except ImportError as e:
 # Загружаем переменные окружения
 load_dotenv()
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('bot.log', encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
+# Logger уже определен выше
 
 # Импорты для улучшенной аудио обработки
 try:
@@ -2587,6 +2589,59 @@ _Чтобы вернуться к обычной суммаризации, сн�
         except Exception as e:
             logger.error(f"Ошибка редактирования сообщения: {e}")
             return None
+
+    async def run(self):
+        """Запуск бота"""
+        logger.info("🚀 Запуск Simple Telegram Bot")
+        
+        # Очистка webhook
+        await self.clear_webhook()
+        
+        # Настройка команд
+        await self.setup_bot_commands()
+        
+        # Основной цикл обработки сообщений
+        offset = None
+        consecutive_errors = 0
+        max_consecutive_errors = 10
+        
+        while True:
+            try:
+                updates = await self.get_updates(offset)
+                
+                if updates and updates.get("ok"):
+                    consecutive_errors = 0
+                    
+                    for update in updates.get("result", []):
+                        try:
+                            await self.handle_update(update)
+                            offset = update["update_id"] + 1
+                        except Exception as e:
+                            logger.error(f"Ошибка обработки update {update.get('update_id', 'unknown')}: {str(e)}")
+                            offset = update.get("update_id", 0) + 1
+                else:
+                    consecutive_errors += 1
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.error(f"Слишком много ошибок подряд ({consecutive_errors}). Перезапуск через 30 секунд...")
+                        await asyncio.sleep(30)
+                        consecutive_errors = 0
+                    else:
+                        await asyncio.sleep(2)
+            
+            except KeyboardInterrupt:
+                logger.info("Получен сигнал остановки")
+                break
+            except Exception as e:
+                consecutive_errors += 1
+                logger.error(f"Ошибка в основном цикле: {str(e)}")
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error(f"Критическое количество ошибок ({consecutive_errors}). Остановка бота.")
+                    break
+                
+                await asyncio.sleep(5)
+        
+        logger.info("Simple Telegram Bot остановлен")
 
 async def main():
     """Главная функция"""

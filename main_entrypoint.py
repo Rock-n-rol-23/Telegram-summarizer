@@ -51,6 +51,15 @@ def run_telegram_bot():
     """Функция для запуска бота в отдельном потоке"""
     try:
         logger.info("Запуск Telegram бота...")
+        
+        # Сначала настраиваем логирование для simple_bot
+        import logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[logging.StreamHandler(sys.stdout)]
+        )
+        
         from simple_bot import SimpleTelegramBot
         bot = SimpleTelegramBot()
         
@@ -60,7 +69,8 @@ def run_telegram_bot():
         
     except Exception as e:
         logger.error(f"Ошибка запуска Telegram бота: {e}")
-        sys.exit(1)
+        import traceback
+        logger.error(f"Детали ошибки: {traceback.format_exc()}")
 
 if __name__ == '__main__':
     logger.info("🚀 Запуск главного entry point")
