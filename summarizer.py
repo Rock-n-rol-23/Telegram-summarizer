@@ -10,27 +10,28 @@ from groq import Groq
 import os
 from utils.lang import detect_lang, is_ru, is_en
 
-# Инициализация для локальной модели (lazy loading)
+# Локальные модели отключены по умолчанию
 _local_tokenizer = None
 _local_model = None
 _transformers_available = False
 
-try:
-    from transformers import GPT2LMHeadModel, GPT2Tokenizer
-    import torch
-    _transformers_available = True
-    logging.info("Transformers библиотека загружена успешно")
-except ImportError:
-    logging.warning("Transformers не установлен. Локальная модель недоступна. Используется только Groq API.")
+# Не импортируем transformers для экономии ресурсов
+# try:
+#     from transformers import GPT2LMHeadModel, GPT2Tokenizer
+#     import torch
+#     _transformers_available = True
+#     logging.info("Transformers библиотека загружена успешно")
+# except ImportError:
+#     logging.warning("Transformers не установлен. Локальная модель недоступна. Используется только Groq API.")
 
 logger = logging.getLogger(__name__)
 
 class TextSummarizer:
     """Класс для суммаризации текста с множественными бэкендами"""
     
-    def __init__(self, groq_api_key: str = None, use_local_fallback: bool = True):
+    def __init__(self, groq_api_key: str = None, use_local_fallback: bool = False):
         self.groq_api_key = groq_api_key
-        self.use_local_fallback = use_local_fallback
+        self.use_local_fallback = False  # Отключено по умолчанию
         self.groq_client = None
         
         # Инициализация Groq API

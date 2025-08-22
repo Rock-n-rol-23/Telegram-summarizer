@@ -52,10 +52,11 @@ class YouTubeProcessor:
                 info = ydl.extract_info(url, download=False)
                 
                 duration = info.get('duration', 0)
-                if duration > 3600:  # 1 час максимум
+                max_duration = 7200  # 2 часа по новому лимиту
+                if duration > max_duration:
                     return {
                         'valid': False,
-                        'error': 'Видео слишком длинное (более 1 часа)'
+                        'error': f'Видео слишком длинное (более {max_duration//3600} часов)'
                     }
                 
                 if info.get('is_live'):
