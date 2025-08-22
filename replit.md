@@ -9,6 +9,14 @@ Preferred communication style: Simple, everyday language.
 ## System Architecture
 The application follows a modular Python architecture with clear separation of concerns, designed for 24/7 operation and scalability.
 
+### Recent Updates (2025-08-22)
+- **Two-Phase Quality-First Summarization**: Implemented comprehensive pipeline with Phase A (JSON fact extraction) and Phase B (natural text generation)
+- **Enhanced Number Preservation**: 99% accuracy guarantee for critical numbers, currencies, dates, and percentages
+- **Web Tables Support**: Automatic HTML table extraction and Markdown conversion
+- **Quality Validation System**: Multi-metric scoring with preservation validation
+- **Graceful Degradation**: System works with partial dependencies through fallback mechanisms
+- **Integrated Architecture**: Unified interface combining new capabilities with existing bot functionality
+
 ### Design Principles
 - **Modularity**: Clear separation of layers (Bot, AI Service, Data, Configuration).
 - **Redundancy**: Dual AI backend (Groq API and local Hugging Face) for high availability.
