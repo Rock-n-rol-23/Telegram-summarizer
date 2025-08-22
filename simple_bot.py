@@ -26,6 +26,12 @@ from youtube_processor import YouTubeProcessor
 from file_processor import FileProcessor
 from audio_processor import AudioProcessor
 from smart_summarizer import SmartSummarizer
+from utils.tg_audio import (
+    extract_audio_descriptor,
+    get_audio_info_text,
+    format_duration,
+    is_audio_document,
+)
 
 # Настройка логирования (должно быть раньше всех импортов)
 import logging
@@ -1340,7 +1346,6 @@ _Чтобы вернуться к обычной суммаризации, сн�
 
     async def handle_audio_message(self, update: dict):
         """Универсальная обработка всех типов аудио сообщений"""
-        from utils.tg_audio import extract_audio_descriptor, get_audio_info_text, format_duration
         
         message = update["message"]
         chat_id = message["chat"]["id"]
@@ -1909,16 +1914,16 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     return
                 elif "document" in message:
                     # Проверяем, является ли документ аудио файлом
-                    from utils.tg_audio import is_audio_document
-                    
                     doc = message["document"]
+                    is_audio = is_audio_document(doc)
+                    logger.info(f"DEBUG: document '{doc.get('file_name')}' mime='{doc.get('mime_type')}' -> is_audio={is_audio}")
                     
-                    if is_audio_document(doc):
+                    if is_audio:
                         if ("forward_from" in message) or ("forward_from_chat" in message) or ("forward_origin" in message):
                             logger.info("Пересланный аудио документ без текста — направляю в handle_audio_message")
                         await self.handle_audio_message(update)
                     else:
-                        # Обработка документов (PDF, DOCX, DOC, TXT)
+                        # Обработка документов (PDF, DOCX, DOC, TXT, PPTX; сканы через OCR)
                         await self.handle_document_message(update)
                     return
                 else:
@@ -2383,7 +2388,6 @@ _Чтобы вернуться к обычной суммаризации, сн�
 
     async def handle_youtube_message(self, update: dict, youtube_urls: list):
         """Обработчик сообщений с YouTube URL для суммаризации видео"""
-        from utils.tg_audio import format_duration
         
         message = update["message"]
         chat_id = message["chat"]["id"]

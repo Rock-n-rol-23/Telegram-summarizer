@@ -169,3 +169,31 @@ def get_audio_info_text(audio_info: Dict) -> str:
         parts.append(f"📦 Размер: {format_file_size(file_size)}")
     
     return "\n".join(parts)
+
+
+def is_audio_document(doc: Dict) -> bool:
+    """
+    Определяет, является ли telegram 'document' аудио-файлом.
+    Смотрим на mime_type и расширение имени файла.
+    Возвращает True только для аудио; иначе False.
+    """
+    try:
+        mime = (doc.get("mime_type") or "").lower()
+        name = (doc.get("file_name") or "").lower()
+
+        # Явные звуки по MIME
+        if mime.startswith("audio/"):
+            return True
+
+        # Телеграм иногда присылает audio как application/octet-stream
+        audio_exts = {
+            ".mp3", ".m4a", ".aac", ".flac", ".wav",
+            ".ogg", ".oga", ".opus", ".amr", ".wma", ".mka"
+        }
+        if name and any(name.endswith(ext) for ext in audio_exts):
+            return True
+
+        return False
+    except Exception:
+        # Если сомневаемся — считаем НЕ аудио, чтобы не ломать обработку документов
+        return False
