@@ -311,9 +311,14 @@ def _extract_with_trafilatura(raw_html: str, final_url: str) -> tuple[Optional[s
             raw_html,
             url=final_url,
             include_comments=False,
-            include_tables=False,
+            include_tables=True,  # Включаем таблицы
             output_format="txt"
         )
+        
+        # Добавляем извлеченные таблицы в Markdown формате
+        tables_markdown = extract_tables_as_markdown(raw_html)
+        if tables_markdown:
+            text = text + "\n\n[Таблицы]\n" + tables_markdown
         
         # Извлекаем метаданные
         metadata = {}
@@ -499,6 +504,84 @@ def _normalize_text(text: str) -> str:
                 result_paragraphs.append(current_part.strip())
     
     return '\n\n'.join(result_paragraphs).strip()
+
+
+def extract_tables_as_markdown(html: str) -> str:
+    """Извлекает таблицы из HTML и конвертирует их в Markdown"""
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+        tables = soup.find_all('table')
+        
+        if not tables:
+            return ""
+        
+        markdown_tables = []
+        
+        for i, table in enumerate(tables[:5]):  # Ограничиваем до 5 таблиц
+            try:
+                # Извлекаем заголовки
+                headers = []
+                header_row = table.find('thead') or table.find('tr')
+                if header_row:
+                    header_cells = header_row.find_all(['th', 'td'])
+                    for cell in header_cells:
+                        text = cell.get_text().strip()
+                        headers.append(text if text else f"Колонка {len(headers) + 1}")
+                
+                if not headers:
+                    continue
+                
+                # Извлекаем данные
+                rows = []
+                tbody = table.find('tbody') or table
+                data_rows = tbody.find_all('tr')[1 if table.find('thead') else 0:]  # Пропускаем заголовочную строку
+                
+                for row in data_rows[:20]:  # Ограничиваем до 20 строк
+                    cells = row.find_all(['td', 'th'])
+                    if cells:
+                        row_data = []
+                        for j, cell in enumerate(cells):
+                            if j >= len(headers):  # Не больше чем заголовков
+                                break
+                            text = cell.get_text().strip()
+                            # Очищаем от переносов и лишних пробелов
+                            text = ' '.join(text.split())
+                            row_data.append(text if text else "-")
+                        
+                        # Дополняем недостающие колонки
+                        while len(row_data) < len(headers):
+                            row_data.append("-")
+                        
+                        rows.append(row_data)
+                
+                if rows:
+                    # Формируем Markdown таблицу
+                    markdown_table = []
+                    
+                    # Заголовки
+                    markdown_table.append("| " + " | ".join(headers) + " |")
+                    # Разделитель
+                    markdown_table.append("| " + " | ".join(["---"] * len(headers)) + " |")
+                    
+                    # Данные
+                    for row in rows:
+                        markdown_table.append("| " + " | ".join(row) + " |")
+                    
+                    table_name = f"Таблица {i + 1}"
+                    if len(tables) == 1:
+                        table_name = "Таблица"
+                    
+                    markdown_tables.append(f"{table_name}:\n" + "\n".join(markdown_table))
+            
+            except Exception as e:
+                logger.debug(f"Ошибка обработки таблицы {i + 1}: {e}")
+                continue
+        
+        return "\n\n".join(markdown_tables) if markdown_tables else ""
+    
+    except Exception as e:
+        logger.debug(f"Ошибка извлечения таблиц: {e}")
+        return ""
 
 
 def _extract_links_from_html(raw_html: str, final_url: str) -> List[Dict[str, str]]:

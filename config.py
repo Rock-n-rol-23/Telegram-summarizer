@@ -73,6 +73,11 @@ class Config:
         self.PDF_OCR_DPI = int(os.getenv('PDF_OCR_DPI', '200'))
         self.MAX_PAGES_OCR = int(os.getenv('MAX_PAGES_OCR', '50'))
         
+        # Новые флаги для улучшенной суммаризации
+        self.ENABLE_LOCAL_FALLBACK = os.getenv('ENABLE_LOCAL_FALLBACK', 'false').lower() == 'true'
+        self.YT_MAX_DURATION_SECONDS = int(os.getenv('YT_MAX_DURATION_SECONDS', '7200'))  # 2 часа
+        self.FORCE_JSON_MODE = os.getenv('FORCE_JSON_MODE', 'true').lower() == 'true'
+        
         # Валидация критически важных параметров
         self._validate_config()
     
