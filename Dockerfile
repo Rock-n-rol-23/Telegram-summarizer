@@ -8,9 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     build-essential \
     curl \
-    tesseract-ocr \
-    tesseract-ocr-rus \
-    tesseract-ocr-eng \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install dependencies
