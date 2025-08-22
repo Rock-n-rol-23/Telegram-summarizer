@@ -27,19 +27,10 @@ from file_processor import FileProcessor
 from audio_processor import AudioProcessor
 from smart_summarizer import SmartSummarizer
 
-# Импорт интегрированной системы суммаризации
-try:
-    from integrated_summarizer import IntegratedSummarizer, get_integrated_summarizer
-    INTEGRATED_SUMMARIZATION_AVAILABLE = True
-    logger.info("Интегрированная система суммаризации доступна")
-except ImportError as e:
-    INTEGRATED_SUMMARIZATION_AVAILABLE = False
-    logger.warning(f"Интегрированная система суммаризации недоступна: {e}")
-
 # Загружаем переменные окружения
 load_dotenv()
 
-# Настройка логирования
+# Настройка логирования - ВАЖНО: делаем это до любых других импортов
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -49,6 +40,15 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Импорт интегрированной системы суммаризации
+try:
+    from integrated_summarizer import IntegratedSummarizer, get_integrated_summarizer
+    INTEGRATED_SUMMARIZATION_AVAILABLE = True
+    logger.info("Интегрированная система суммаризации доступна")
+except ImportError as e:
+    INTEGRATED_SUMMARIZATION_AVAILABLE = False
+    logger.warning(f"Интегрированная система суммаризации недоступна: {e}")
 
 # Импорты для улучшенной аудио обработки
 try:
