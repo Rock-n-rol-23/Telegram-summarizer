@@ -37,6 +37,13 @@ dependencies = [
     "python-pptx>=0.6.23",
     "pymupdf>=1.24.0",
     "ffmpeg-python>=0.2.0",
+    "apscheduler>=3.10.4",
+    "rapidfuzz>=3.9.4",
+    "scikit-learn>=1.5.1",
+    "stop-words>=2018.7.23",
+    "yake>=0.4.8",
+    "python-dateutil>=2.9.0.post0",
+    "pytz>=2024.1",
 ]
 
 [[tool.uv.index]]

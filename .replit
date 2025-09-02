@@ -2,7 +2,7 @@ modules = ["python-3.11", "python3", "postgresql-16"]
 
 [nix]
 channel = "stable-24_05"
-packages = ["ffmpeg", "ffmpeg-full", "freetype", "gumbo", "harfbuzz", "jbig2dec", "lcms2", "libimagequant", "libjpeg", "libjpeg_turbo", "libtiff", "libwebp", "libxcrypt", "mupdf", "openjpeg", "pkg-config", "swig", "tcl", "tesseract", "tk", "xcbuild", "xcodebuild", "zlib"]
+packages = ["ffmpeg", "ffmpeg-full", "freetype", "glibcLocales", "gumbo", "harfbuzz", "jbig2dec", "lcms2", "libimagequant", "libjpeg", "libjpeg_turbo", "libtiff", "libwebp", "libxcrypt", "mupdf", "openjpeg", "pkg-config", "rapidfuzz-cpp", "swig", "taskflow", "tcl", "tesseract", "tk", "xcbuild", "xcodebuild", "zlib"]
 
 [workflows]
 runButton = "Project"

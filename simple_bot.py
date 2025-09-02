@@ -168,6 +168,24 @@ class SimpleTelegramBot:
             except Exception as e:
                 logger.warning(f"Ошибка инициализации настроек аудио: {e}")
         
+        # Инициализация системы дайджестов
+        try:
+            from digest.db import init_digest_db
+            from digest.scheduler import start_scheduler
+            
+            # Инициализация базы данных дайджестов
+            init_digest_db()
+            logger.info("База данных дайджестов инициализирована")
+            
+            # Запуск планировщика дайджестов
+            start_scheduler(self)
+            logger.info("Планировщик дайджестов запущен")
+            
+            self.digest_enabled = True
+        except Exception as e:
+            logger.warning(f"Ошибка инициализации системы дайджестов: {e}")
+            self.digest_enabled = False
+        
         logger.info("Simple Telegram Bot инициализирован")
     
     def extract_urls_from_message(self, text: str) -> list:
@@ -520,6 +538,15 @@ class SimpleTelegramBot:
 📊 **ДРУГИЕ КОМАНДЫ:**
 • /stats → ваша статистика
 • /help → эта справка
+• /digest_help → помощь по дайджестам
+
+🔄 **ДАЙДЖЕСТЫ КАНАЛОВ** (экспериментальная функция):
+• /digest_add_channel @канал → добавить канал в дайджест
+• /digest_list → список ваших каналов
+• /digest_schedule daily 09:00 → ежедневные дайджесты в 9:00
+• /digest_now 24h → создать дайджест за последние 24 часа
+• /keywords_add биткоин; IPO → добавить ключевые слова для уведомлений
+• /trends weekly → анализ трендов за неделю
 
 💡 **Особенности:**
 • Минимум 20 символов для текста
@@ -1746,6 +1773,16 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         elif text in ["/50"]:
                             await self.handle_compression_command(update, 50)
                         else:
+                            # Проверка команд дайджестов
+                            if self.digest_enabled:
+                                try:
+                                    from digest.commands import handle_digest_command
+                                    digest_handled = await handle_digest_command(update, self)
+                                    if digest_handled:
+                                        return
+                                except Exception as e:
+                                    logger.error(f"Ошибка обработки команды дайджеста: {e}")
+                            
                             logger.warning(f"Неизвестная команда: {text}")
                             await self.send_message(
                                 chat_id,
@@ -1937,6 +1974,13 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         logger.warning(f"DEBUG: Сообщение не содержит ни текста, ни медиа контента: {message}")
                         await self.send_message(chat_id, "❌ Сообщение не содержит текста.\n\nПожалуйста, отправьте текстовое сообщение для суммаризации.")
 
+            # Обработка channel_post и edited_channel_post для дайджестов
+            elif self.digest_enabled and ("channel_post" in update or "edited_channel_post" in update):
+                try:
+                    from digest.sources import handle_channel_update
+                    await handle_channel_update(update, self)
+                except Exception as e:
+                    logger.error(f"Ошибка обработки канального поста: {e}")
             else:
                 logger.warning(f"Неизвестный тип обновления: {update}")
                         
@@ -1950,7 +1994,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
         url = f"{self.base_url}/getUpdates"
         params = {
             "timeout": timeout,
-            "allowed_updates": ["message"]
+            "allowed_updates": ["message", "channel_post", "edited_channel_post"]
         }
         
         if offset:
