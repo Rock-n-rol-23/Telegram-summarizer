@@ -1,0 +1,306 @@
+Ты — инженер, который дорабатывает уже работающий Telegram-бот. Нужны новые фичи (без поломки текущего функционала):
+
+Цели
+
+Автодайджест по выбранным каналам по расписанию: hourly/daily/weekly/monthly.
+
+Трекер ключевых слов/тем — мгновенный пинг с мини-саммари при совпадении.
+
+Сводка по трендам за неделю/месяц (топ-темы, частотность, динамика).
+
+Анти-дубли и слияние новостей (кластеризация сообщений об одном событии).
+
+Жёсткие требования
+
+Не трогай и не ломай текущую логику бота (обработка сообщений/аудио/файлов/ссылок).
+
+Весь новый код — в папке digest/ с минимальными точками интеграции.
+
+Бесплатные библиотеки, поддержка RU/EN.
+
+Хранилище — SQLite (sqlite3), без внешних сервисов.
+
+Планировщик — APScheduler (BackgroundScheduler + Cron/Interval triggers).
+
+Дедуп/слияние — TF-IDF + cosine (sklearn) и/или RapidFuzz (без платных эмбеддингов).
+
+Источники каналов:
+
+Основной: Bot API (бот админом в канале → channel_post/edited_channel_post).
+
+Опционально: Telethon/MTProto через user-session (скелет, выключено по умолчанию).
+
+Новые зависимости (добавь/обнови requirements.txt)
+APScheduler==3.10.4
+rapidfuzz==3.9.4
+scikit-learn==1.5.1
+stop-words==2018.7.23
+yake==0.4.8
+python-dateutil==2.9.0.post0
+pytz==2024.1
+
+Переменные окружения (.env)
+DIGEST_TIMEZONE=Europe/Amsterdam
+DIGEST_DEFAULT_DAILY_TIME=09:00
+DIGEST_DEFAULT_HOURLY_MINUTE=05
+DIGEST_MAX_ITEMS=15
+DIGEST_HOURLY_MAX_ITEMS=8
+DIGEST_MIN_CLUSTER_SIM=0.62
+DIGEST_DUP_SIM_THRESHOLD=85
+DIGEST_USE_TELETHON=false
+# Необязательно: тишина для hourly, диапазон часов локального времени, например 23-07 или пусто
+DIGEST_QUIET_HOURS=
+# Захват окна для hourly (минут) с запасом на задержки
+DIGEST_HOURLY_WINDOW_MIN=65
+
+Структура файлов (создать новые)
+digest/
+  __init__.py
+  db.py
+  models.sql
+  scheduler.py
+  sources.py
+  preprocess.py
+  dedup.py
+  cluster.py
+  keywords.py
+  trends.py
+  renderer.py
+  commands.py
+  telethon_stub.py
+
+База данных (SQLite)
+
+digest/models.sql (idempotent — выполнять на старте):
+
+PRAGMA journal_mode=WAL;
+
+CREATE TABLE IF NOT EXISTS users (
+  user_id INTEGER PRIMARY KEY,
+  chat_id INTEGER NOT NULL,
+  locale TEXT DEFAULT 'ru'
+);
+
+CREATE TABLE IF NOT EXISTS channels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT,
+  tg_chat_id INTEGER,
+  title TEXT,
+  added_by_user_id INTEGER,
+  is_active INTEGER DEFAULT 1,
+  UNIQUE(username, tg_chat_id)
+);
+
+CREATE TABLE IF NOT EXISTS user_channels (
+  user_id INTEGER,
+  channel_id INTEGER,
+  is_active INTEGER DEFAULT 1,
+  PRIMARY KEY (user_id, channel_id)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id INTEGER,
+  tg_message_id INTEGER,
+  message_url TEXT,
+  posted_at INTEGER,
+  text TEXT,
+  raw_json TEXT,
+  UNIQUE(channel_id, tg_message_id)
+);
+
+CREATE TABLE IF NOT EXISTS keywords (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,
+  pattern TEXT,
+  is_regex INTEGER DEFAULT 0,
+  is_active INTEGER DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS alerts_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  keyword_id INTEGER,
+  message_id INTEGER,
+  alerted_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS digests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,
+  period TEXT,             -- 'hourly'|'daily'|'weekly'|'monthly'|'custom'
+  from_ts INTEGER,
+  to_ts INTEGER,
+  rendered TEXT,
+  created_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS schedules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,
+  cron TEXT,               -- например: "5 * * * *" для hourly @05
+  period TEXT,             -- hourly/daily/weekly/monthly
+  is_active INTEGER DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_channel_time ON messages(channel_id, posted_at);
+CREATE INDEX IF NOT EXISTS idx_messages_text ON messages(id);
+
+Источники (digest/sources.py)
+
+Bot API: хендлеры channel_post/edited_channel_post → сохраняй канал/сообщение.
+
+Telethon: telethon_stub.py с no-op start_if_enabled() и TODO-методами.
+
+Предобработка (digest/preprocess.py)
+
+Очистка ссылок/эмодзи, lower, сворачивание пробелов.
+
+RU/EN стоп-слова (stop-words).
+
+clean(text), tokenize(text), for_vectorizer(text).
+
+Дедуп и слияние (digest/dedup.py, digest/cluster.py)
+
+Быстрый дедуп: RapidFuzz token_set_ratio ≥ DIGEST_DUP_SIM_THRESHOLD.
+
+Кластеризация события: TF-IDF bi-gram + cosine, порог DIGEST_MIN_CLUSTER_SIM, группировка union-find или DBSCAN(metric='cosine', eps=1-threshold).
+
+Ключевые слова/алерты (digest/keywords.py)
+
+Матч регексом или case-insensitive substring.
+
+При совпадении — мини-саммари (используй существующую функцию суммаризации проекта) + один алерт на событие (склей похожие ключи), лог в alerts_log.
+
+Тренды (digest/trends.py)
+
+yake на корпусе за период: топ-фразы, динамика (WoW/MoM), топ-каналы.
+
+Рендерер (digest/renderer.py)
+
+HTML/MarkdownV2: заголовок (период, окно времени), секции «Главное», «По каналам» (опционально), «Ключевые цифры», «Тренды».
+
+Учитывай лимиты: DIGEST_MAX_ITEMS, для hourly — min(DIGEST_HOURLY_MAX_ITEMS, DIGEST_MAX_ITEMS).
+
+Пагинация «Показать ещё» через inline-кнопки (callback_data).
+
+Планировщик (digest/scheduler.py)
+
+BackgroundScheduler(timezone=ENV['DIGEST_TIMEZONE']).
+
+Подхватывай schedules из БД и регистрируй job’ы.
+
+Поддержка hourly:
+
+Храним cron вида "M * * * *", где M — минута часа (по умолчанию из DIGEST_DEFAULT_HOURLY_MINUTE).
+
+При запуске hourly-джобы вычисляй окно: to_ts = now(), from_ts = to_ts - DIGEST_HOURLY_WINDOW_MIN*60 (по умолчанию 65 минут, чтобы не потерять запоздавшие события).
+
+Пропускай запуск в «тихие часы», если DIGEST_QUIET_HOURS задан (например 23-07).
+
+Универсальная задача:
+
+run_digest_job(user_id, period, from_ts, to_ts):
+
+Собрать сообщения из user_channels за окно.
+
+Дедуп → Кластеризация → Саммари кластеров (через существующую функцию суммаризации).
+
+Тренды (для daily/weekly/monthly; для hourly — можно опустить или дать «микро-тренды»).
+
+Рендер → Отправка пользователю → запись в digests.
+
+Экспортируй: start_scheduler(), register_or_update_schedule(user_id, cron, period).
+
+Команды бота (digest/commands.py)
+
+/digest_help — справка.
+
+/digest_add_channel @username (или переслать пост из канала) — сохранить канал.
+
+/digest_list — список каналов.
+
+/digest_remove_channel @username
+
+Расписания:
+
+/digest_schedule hourly [mm] → пример: /digest_schedule hourly 05 (каждый час в :05).
+
+/digest_schedule daily HH:MM → 09:00
+
+/digest_schedule weekly <Mon|Tue|...> HH:MM
+
+/digest_schedule monthly <DD> HH:MM
+
+/digest_schedule off — выключить все расписания пользователя (или сделать /dg_off).
+
+Показывай текущие активные расписания пользователю после команды.
+
+/digest_now [1h|24h|7d|30d] — мгновенный дайджест (добавь 1h).
+
+Ключевые слова:
+
+/keywords_add ставка ЦБ; IPO; AI-агенты
+
+/keywords_list, /keywords_remove ...
+
+/alerts on|off
+
+/trends weekly|monthly
+
+Валидация ввода для hourly: минуту принимать 00–59, иначе ответить с примерами.
+
+Точки интеграции с существующим кодом
+
+В основном entrypoint (например, main.py):
+
+digest.db.init_db() и exec_script('digest/models.sql') на старте.
+
+Подключить команды/колбеки из digest/commands.py.
+
+Включить хендлеры channel_post/edited_channel_post из digest/sources.py.
+
+Запустить digest.scheduler.start_scheduler() после инициализации бота.
+
+Аккуратно импортировать существующую функцию суммаризации (создай тонкий адаптер summarize_text(text, lang='ru') с фоллбэком, но сигнатуру старой функции не ломать).
+
+Поведение/UX
+
+При добавлении канала: если бот не админ — объяснить как выдать права и повторить.
+
+Дайджесты сливают дубли и показывают источники по каждому пункту.
+
+Hourly-дайджест должен быть компактным (≤ DIGEST_HOURLY_MAX_ITEMS), без «тяжёлых» трендов, но с быстрыми «главными пунктами».
+
+Алерты по ключам не спамят: несколько сработавших ключей по одному событию — один алерт с перечислением ключей.
+
+Тест-кейс (добавь к ручным проверкам)
+
+Настроить: /digest_schedule hourly 05 → убедиться, что джоба встала на :05 каждого часа.
+
+Опубликовать 3–4 поста в ближайший час (2 похожих) → в дайджесте один слитый пункт, размер не превышает DIGEST_HOURLY_MAX_ITEMS.
+
+Поставить DIGEST_QUIET_HOURS=23-07 и проверить, что в эти часы ежечасные дайджесты не приходят.
+
+/digest_now 1h — присылает дайджест с окном ~последнего часа.
+
+Daily/weekly/monthly продолжают работать как прежде.
+
+Качество/ограничения
+
+Для приватных каналов без username ссылки могут быть некликабельны — показывай название и время.
+
+Hourly-окно делай с запасом (DIGEST_HOURLY_WINDOW_MIN) на задержки Телеграма/планировщика.
+
+Все изменения — изолированы: никаких правок существующих обработчиков помимо подключения новых модулей/команд/планировщика.
+
+Готовый результат
+
+Папка digest/ с рабочими модулями.
+
+Обновлённый requirements.txt.
+
+Мягкая интеграция в entrypoint.
+
+Команды работают, ежечасные/ежедневные дайджесты собираются, анти-дубли и алерты функционируют.
+
+Сделай изменения, закоммить и опиши в README новые команды (/digest_schedule hourly, /digest_now 1h, DIGEST_QUIET_HOURS, лимиты для hourly).
