@@ -15,14 +15,18 @@ from quality.quality_checks import (
     validate_json_structure,
     trim_to_length
 )
+from llm.provider_router import generate_completion
+from utils.language_detect import detect_language_simple, get_language_info, get_chunking_params
+from config import config
 
 logger = logging.getLogger(__name__)
 
 class SummarizationPipeline:
     """Двухфазная система суммаризации с контролем качества"""
     
-    def __init__(self, groq_client, fallback_summarizer=None):
-        self.groq_client = groq_client
+    def __init__(self, groq_client=None, fallback_summarizer=None):
+        # Keep backward compatibility but use new LLM router
+        self.groq_client = groq_client  # For backward compatibility
         self.fallback_summarizer = fallback_summarizer
         self.prompts = self._load_prompts()
     
@@ -68,8 +72,13 @@ class SummarizationPipeline:
             'FALLBACK_PROMPT': """Создай краткое изложение с сохранением всех чисел и дат. В конце блок "🔢 Цифры и факты"."""
         }
     
-    def _split_into_chunks(self, text: str, max_chars: int = 2800) -> List[str]:
+    def _split_into_chunks(self, text: str, max_chars: Optional[int] = None) -> List[str]:
         """Разбивка текста на чанки с сохранением структуры"""
+        if max_chars is None:
+            # Use config-based chunking
+            chunking_params = get_chunking_params(text, config.SUM_CHUNK_TOKENS)
+            max_chars = chunking_params['max_chars']
+        
         if len(text) <= max_chars:
             return [text]
         
@@ -449,3 +458,203 @@ def summarize_text_pipeline(text: str, groq_client, lang: Literal["ru", "en"] = 
     except RuntimeError:
         # Нет активного loop
         return asyncio.run(pipeline.summarize_text_pipeline(text, lang, target_chars, format_type))
+
+
+# New unified interface functions
+def summarize_text(text: str, lang_hint: Optional[str] = None) -> str:
+    """
+    Unified text summarization with automatic language detection and chunking
+    
+    Args:
+        text: Input text to summarize
+        lang_hint: Optional language hint ('ru' or 'en')
+        
+    Returns:
+        Summarized text
+    """
+    # Auto-detect language if not provided
+    if not lang_hint:
+        lang_hint = detect_language_simple(text)
+    
+    lang_info = get_language_info(lang_hint)
+    
+    try:
+        # Use chunked approach for long texts
+        chunks = _chunk_text_smart(text)
+        
+        if len(chunks) == 1:
+            # Single chunk - direct summarization
+            return _summarize_single_chunk(chunks[0], lang_hint, lang_info)
+        else:
+            # Multiple chunks - map-reduce approach
+            return _summarize_multiple_chunks(chunks, lang_hint, lang_info)
+            
+    except Exception as e:
+        logger.error(f"Summarization failed: {e}")
+        raise Exception(f"Суммаризация недоступна: {str(e)}")
+
+
+def summarize_document(text_or_md: str, meta: dict) -> str:
+    """
+    Unified document summarization with metadata awareness
+    
+    Args:
+        text_or_md: Document text or markdown
+        meta: Metadata dict with source info
+        
+    Returns:
+        Summarized document
+    """
+    source = meta.get('source', 'unknown')
+    lang_hint = meta.get('language')
+    
+    # Detect language if not provided
+    if not lang_hint:
+        lang_hint = detect_language_simple(text_or_md)
+    
+    lang_info = get_language_info(lang_hint)
+    
+    # Adjust system prompt based on source
+    source_context = _get_source_context(source, lang_hint)
+    
+    try:
+        chunks = _chunk_text_smart(text_or_md)
+        
+        if len(chunks) == 1:
+            return _summarize_single_chunk(chunks[0], lang_hint, lang_info, source_context)
+        else:
+            return _summarize_multiple_chunks(chunks, lang_hint, lang_info, source_context)
+            
+    except Exception as e:
+        logger.error(f"Document summarization failed: {e}")
+        raise Exception(f"Суммаризация документа недоступна: {str(e)}")
+
+
+def _chunk_text_smart(text: str) -> List[str]:
+    """Smart text chunking with overlap"""
+    chunking_params = get_chunking_params(text, config.SUM_CHUNK_TOKENS)
+    max_chars = chunking_params['max_chars']
+    overlap_chars = chunking_params.get('overlap_chars', config.SUM_OVERLAP_TOKENS * 3)
+    
+    if len(text) <= max_chars:
+        return [text]
+    
+    chunks = []
+    start = 0
+    
+    while start < len(text):
+        end = start + max_chars
+        
+        if end >= len(text):
+            # Last chunk
+            chunks.append(text[start:])
+            break
+        
+        # Try to break at sentence boundary
+        chunk_text = text[start:end]
+        last_sentence_end = max(
+            chunk_text.rfind('. '),
+            chunk_text.rfind('! '),
+            chunk_text.rfind('? ')
+        )
+        
+        if last_sentence_end > max_chars * 0.7:  # At least 70% of target length
+            end = start + last_sentence_end + 2
+        
+        chunks.append(text[start:end])
+        start = end - overlap_chars  # Overlap for context
+    
+    return chunks
+
+
+def _summarize_single_chunk(text: str, lang: str, lang_info: dict, source_context: str = "") -> str:
+    """Summarize a single text chunk"""
+    system_prompt = f"""Ты эксперт в аналитических резюме {lang_info['native_name']}/{'English' if lang == 'en' else 'Russian'}. 
+Структурируй факты, цифры, даты, имена; избегай лишней воды; пиши кратко и точно.
+{source_context}"""
+    
+    user_prompt = f"""Сделай выжимку из текста (bullets, без пересказа вступлений).
+Максимум {config.SUM_MAX_SENTENCES} предложений.
+
+Текст:
+{text}"""
+    
+    return generate_completion(
+        prompt=user_prompt,
+        system=system_prompt,
+        temperature=0.2,
+        max_tokens=2000
+    )
+
+
+def _summarize_multiple_chunks(chunks: List[str], lang: str, lang_info: dict, source_context: str = "") -> str:
+    """Map-reduce summarization for multiple chunks"""
+    # Phase 1: Summarize each chunk (micro-summaries)
+    micro_summaries = []
+    
+    chunk_system = f"""Ты эксперт в аналитических резюме {lang_info['native_name']}/{'English' if lang == 'en' else 'Russian'}.
+Создай краткие bullets с фактами, цифрами, датами и именами.
+{source_context}"""
+    
+    for i, chunk in enumerate(chunks):
+        chunk_prompt = f"""Создай краткое резюме части {i+1} из {len(chunks)}:
+
+{chunk}"""
+        
+        try:
+            micro_summary = generate_completion(
+                prompt=chunk_prompt,
+                system=chunk_system,
+                temperature=0.2,
+                max_tokens=800
+            )
+            micro_summaries.append(micro_summary)
+        except Exception as e:
+            logger.error(f"Failed to summarize chunk {i+1}: {e}")
+            # Fallback: use first few sentences
+            sentences = chunk.split('. ')[:3]
+            micro_summaries.append('. '.join(sentences) + '.')
+    
+    # Phase 2: Aggregate micro-summaries
+    all_micro = '\n\n'.join([f"Часть {i+1}:\n{summary}" for i, summary in enumerate(micro_summaries)])
+    
+    aggregation_system = f"""Ты эксперт в аналитических резюме {lang_info['native_name']}/{'English' if lang == 'en' else 'Russian'}.
+Объедини резюме всех частей в финальное изложение.
+Сохрани все факты и цифры, убери повторы."""
+    
+    aggregation_prompt = f"""Объедини bullets из всех частей в {config.SUM_MAX_SENTENCES} предложений максимум.
+Сохрани факты и цифры, убери повторы.
+
+Части для объединения:
+{all_micro}"""
+    
+    return generate_completion(
+        prompt=aggregation_prompt,
+        system=aggregation_system,
+        temperature=0.2,
+        max_tokens=2000
+    )
+
+
+def _get_source_context(source: str, lang: str) -> str:
+    """Get source-specific context for prompts"""
+    contexts = {
+        'web': {
+            'ru': 'Игнорируй навигацию, меню, хлебные крошки и рекламу.',
+            'en': 'Ignore navigation, menus, breadcrumbs and ads.'
+        },
+        'pdf': {
+            'ru': 'Учитывай нумерованные разделы и структуру документа.',
+            'en': 'Consider numbered sections and document structure.'
+        },
+        'doc': {
+            'ru': 'Учитывай нумерованные разделы и структуру документа.',
+            'en': 'Consider numbered sections and document structure.'
+        },
+        'youtube': {
+            'ru': 'Учитывай таймкоды и хронологию видео.',
+            'en': 'Consider timestamps and video chronology.'
+        }
+    }
+    
+    return contexts.get(source, {}).get(lang, '')

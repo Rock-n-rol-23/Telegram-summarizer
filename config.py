@@ -17,8 +17,16 @@ class Config:
         if not self.TELEGRAM_BOT_TOKEN:
             raise ValueError("TELEGRAM_BOT_TOKEN не найден в переменных окружения")
         
-        # Groq API Key (основной для суммаризации)
+        # LLM Configuration (free-first approach)
+        self.OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '')
+        self.USE_OPENROUTER_PRIMARY = os.getenv('USE_OPENROUTER_PRIMARY', 'true').lower() == 'true'
+        self.OPENROUTER_PRIMARY_MODEL = os.getenv('OPENROUTER_PRIMARY_MODEL', 'deepseek/deepseek-chat-v3.1:free')
+        self.OPENROUTER_SECONDARY_MODEL = os.getenv('OPENROUTER_SECONDARY_MODEL', 'qwen/qwen-2.5-72b-instruct:free')
+        
+        # Optional paid fallbacks (disabled by default)
         self.GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
+        self.ENABLE_GROQ_FALLBACK = os.getenv('ENABLE_GROQ_FALLBACK', 'false').lower() == 'true'
+        self.GROQ_LLM_MODEL = os.getenv('GROQ_LLM_MODEL', 'llama-3.3-70b-versatile')
         
         # База данных - приоритет Railway PostgreSQL
         self.DATABASE_URL = os.getenv('RAILWAY_DATABASE_URL') or os.getenv('DATABASE_URL', 'sqlite:///bot_database.db')
@@ -68,10 +76,22 @@ class Config:
         self.LOCAL_LLM_CTX = int(os.getenv('LOCAL_LLM_CTX', '4096'))
         self.LOCAL_LLM_THREADS = int(os.getenv('LOCAL_LLM_THREADS', '0'))
         
-        # Настройки OCR
+        # ASR Configuration (free-first)
+        self.ASR_ENGINE = os.getenv('ASR_ENGINE', 'faster_whisper')
+        self.FASTER_WHISPER_MODEL = os.getenv('FASTER_WHISPER_MODEL', 'large-v3')
+        self.FASTER_WHISPER_COMPUTE = os.getenv('FASTER_WHISPER_COMPUTE', 'float16')
+        
+        # OCR Configuration
+        self.OCR_USE_TESSERACT = os.getenv('OCR_USE_TESSERACT', 'true').lower() == 'true'
+        self.OCR_USE_PADDLE = os.getenv('OCR_USE_PADDLE', 'true').lower() == 'true'
         self.OCR_LANGS = os.getenv('OCR_LANGS', 'rus+eng')
         self.PDF_OCR_DPI = int(os.getenv('PDF_OCR_DPI', '200'))
         self.MAX_PAGES_OCR = int(os.getenv('MAX_PAGES_OCR', '50'))
+        
+        # Summarization Behavior
+        self.SUM_MAX_SENTENCES = int(os.getenv('SUM_MAX_SENTENCES', '10'))
+        self.SUM_CHUNK_TOKENS = int(os.getenv('SUM_CHUNK_TOKENS', '3000'))
+        self.SUM_OVERLAP_TOKENS = int(os.getenv('SUM_OVERLAP_TOKENS', '300'))
         
         # Новые флаги для улучшенной суммаризации
         self.ENABLE_LOCAL_FALLBACK = os.getenv('ENABLE_LOCAL_FALLBACK', 'false').lower() == 'true'
@@ -86,8 +106,11 @@ class Config:
         if not self.TELEGRAM_BOT_TOKEN:
             raise ValueError("Telegram Bot Token обязателен")
         
-        if not self.GROQ_API_KEY:
-            print("⚠️  Предупреждение: GROQ_API_KEY не установлен. Будет использована только локальная модель.")
+        if not self.OPENROUTER_API_KEY and not self.GROQ_API_KEY:
+            print("⚠️  Предупреждение: Ни OPENROUTER_API_KEY, ни GROQ_API_KEY не установлены. Нужен хотя бы один из них.")
+        
+        if not self.OPENROUTER_API_KEY:
+            print("⚠️  Предупреждение: OPENROUTER_API_KEY не установлен. Бесплатные маршруты недоступны.")
         
         if self.MAX_REQUESTS_PER_MINUTE <= 0:
             raise ValueError("MAX_REQUESTS_PER_MINUTE должен быть больше 0")

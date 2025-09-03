@@ -1,0 +1,216 @@
+У меня уже есть работающий Telegram-бот-саммаризатор. Сейчас он использует Groq Llama 3.3-70B для суммаризаций и Whisper v3 для ASR. Мне нужно **переключить проект на бесплатные модели** по умолчанию (сохранив текущие платные как необязательные fallback’и) для всех типов входа: **текст / web / PDF / DOC / DOCX / YouTube / аудио**. Пожалуйста, внеси изменения строго минимально-инвазивно, не ломая существующую архитектуру и публичные интерфейсы.
+
+---
+
+### **0) Общие требования**
+
+1. **Ничего не ломать.** Оставь текущую структуру файлов и публичные функции. Добавляй новые модули/флаги так, чтобы старые импорты не падали.
+2. **По умолчанию — только бесплатные провайдеры.**
+    - Primary: OpenRouter **free routes**.
+    - Secondary: другой OpenRouter free.
+    - Optional: прежний Groq Llama как **ручной** fallback, если включён в .env.
+3. **Языки:** RU/EN авто-детект, но без лишних запросов к внешним сервисам.
+4. **Суммаризация лонгридов:** chunking + map-reduce агрегатор.
+5. **Логи и ошибки:** подробные логи + дружелюбные сообщения пользователю. Rate-limit отрабатываем ретраями и переключением модели.
+6. **Тесты и smoke-скрипты**: добавь простые проверочные сценарии.
+
+---
+
+### **1) Конфиг и переменные окружения**
+
+**Обнови .env.example и чтение конфигов**, добавив новые ключи/флаги:
+
+```
+# --- LLM (free-first) ---
+OPENROUTER_API_KEY=
+USE_OPENROUTER_PRIMARY=true
+OPENROUTER_PRIMARY_MODEL=deepseek/deepseek-chat-v3.1:free
+OPENROUTER_SECONDARY_MODEL=qwen/qwen-2.5-72b-instruct:free
+
+# --- Optional paid fallbacks (не включать по умолчанию) ---
+GROQ_API_KEY=
+ENABLE_GROQ_FALLBACK=false
+GROQ_LLM_MODEL=llama-3.3-70b-versatile
+
+# --- ASR (free-first) ---
+ASR_ENGINE=faster_whisper   # faster_whisper | groq_whisper
+FASTER_WHISPER_MODEL=large-v3
+FASTER_WHISPER_COMPUTE=dtype=float16  # или int8 для экономии памяти
+
+# --- OCR ---
+OCR_USE_TESSERACT=true
+OCR_USE_PADDLE=true
+
+# --- Summarization behaviour ---
+SUM_MAX_SENTENCES=10
+SUM_CHUNK_TOKENS=3000
+SUM_OVERLAP_TOKENS=300
+```
+
+Создай модуль config.py (если уже есть — расширь) для безопасного чтения этих флагов.
+
+---
+
+### **2) Роутер провайдеров LLM (OpenRouter → OpenRouter alt → Groq optional)**
+
+Создай llm/provider_router.py:
+
+- Функция get_llm_client_and_model():
+    1. Если USE_OPENROUTER_PRIMARY=true и есть OPENROUTER_API_KEY — вернуть клиент OpenRouter и OPENROUTER_PRIMARY_MODEL.
+    2. Если запрос получил 429/5xx — **один ретрай** + переключиться на OPENROUTER_SECONDARY_MODEL.
+    3. Если ENABLE_GROQ_FALLBACK=true и есть GROQ_API_KEY — использовать Groq GROQ_LLM_MODEL.
+    4. Иначе — вернуть читаемую ошибку “Свободные маршруты недоступны, попробуйте позже”.
+- Унифицированный интерфейс generate_completion(prompt, system, temperature, max_tokens):
+    - Для OpenRouter: base_url="https://openrouter.ai/api/v1".
+    - Нормализовать ответы, чтобы вызывающий код не знал о провайдере.
+    - Temperature по умолчанию 0.2, max_tokens достаточно для агрегации.
+
+Обнови текущие места, где создаётся клиент LLM (например, summarizer.py/smart_summarizer.py) — замени прямые вызовы на from llm.provider_router import generate_completion.
+
+---
+
+### **3) Алгоритм суммаризации (унификация для всех входов)**
+
+Создай summarization/pipeline.py:
+
+- summarize_text(text: str, lang_hint: Optional[str]=None) -> str
+    - Детект языка лёгким эвристическим методом (символьные биграммы/буквы кириллицы), без внешних запросов.
+    - Нарежь текст на чанки по SUM_CHUNK_TOKENS (ориентируйся на 3k токенов; если нет токенайзера — ориентируйся на символы ~12–15k).
+    - К каждому чанку применяй **prompt для “микро-резюме”** (bullets + цифры, даты, имена).
+    - Сложи микро-резюме и прогоняй **финальный агрегатор** с требованием выдать ≤ SUM_MAX_SENTENCES предложений (по умолчанию 10), с приоритетом фактов, цифр, дедупликацией.
+- summarize_document(text_or_md: str, meta: dict) -> str
+    - Тот же pipeline, добавь учёт meta.source (pdf/doc/web/youtube) — слегка меняй system-prompt: “если web — игнорировать навигацию/хлебные крошки; если pdf/doc — учитывать нумерованные разделы; если youtube — учитывать таймкоды”.
+- Оставь текущие публичные функции/ручки телеграм-бота, просто прокинь их в этот единый pipeline.
+
+**Примечание по prompt’ам:**
+
+- System: “Ты эксперт в аналитических резюме RU/EN. Структурируй факты, цифры, даты, имена; избегай лишней воды; пиши кратко и точно.”
+- User (per-chunk): “Сделай выжимку из текста (bullets, без пересказа вступлений)”.
+- Aggregation: “Объедини bullets из всех частей в **N** предложений максимум, сохрани факты и цифры, убери повторы.”
+
+---
+
+### **4) Бесплатный ASR: Faster-Whisper (с опциональным Groq fallback)**
+
+Создай asr/faster_whisper_engine.py:
+
+- Используй faster-whisper (CTranslate2). Загрузка модели FASTER_WHISPER_MODEL (по умолчанию large-v3), compute_type из .env (float16 или int8).
+- Предобработка: нормализуй входной аудио-файл в mono/16kHz (ffmpeg).
+- VAD: по умолчанию отключено. (Опционально — добавь Silero VAD без внешнего API и зафлагай).
+- Возврат: чистый транскрибированный текст RU/EN.
+
+Обнови текущий audio_processor.py (или аналог):
+
+- Если ASR_ENGINE=faster_whisper — зови локальную функцию.
+- Если ASR_ENGINE=groq_whisper и есть GROQ_API_KEY — оставь текущую ветку Groq Whisper (платный, но опциональный).
+- Добавь кэширование результатов ASR по хешу файла, чтобы не платить временем повторно.
+
+---
+
+### **5) OCR-усиление для PDF/сканов/презентаций (free)**
+
+В content_extraction/pdf_ocr.py (или новый модуль ocr/ocr_router.py) реализуй стратегию:
+
+1. **PyMuPDF**: достать текстовый слой.
+2. Если слабый/пустой — прогнать **Tesseract RU/EN**.
+3. Параллельно прогнать **PaddleOCR RU/EN**.
+4. Выбрать лучший результат по простым метрикам качества (больше символов без артефактов, меньше доли неалфанумерических токенов, базовый словарный скор по RU/EN).
+5. Вернуть унифицированный текст.
+
+Добавь в requirements.txt:
+
+```
+faster-whisper==1.0.3
+ctranslate2==4.3.1
+paddleocr==2.9.1
+paddlepaddle==2.6.1
+pymupdf==1.24.9
+pytesseract==0.3.10
+```
+
+И системные зависимости (в README.md/Dockerfile): tesseract-ocr, языковые пакеты rus+eng, ffmpeg. Для PaddleOCR — CPU-сборка (никаких CUDA).
+
+---
+
+### **6) Web-ссылки (экстракция остаётся) + дедуп и anti-boilerplate**
+
+В content_extraction/web_extractor.py:
+
+- После trafilatura/readability/bs4 прогоняй **anti-boilerplate**: убирай навигацию/сайдбары по эвристике (повтор заголовков, короткие абзацы, много ссылок подряд).
+- Добавь **дедуп по шинглам** (n-граммы слов) между соседними абзацами.
+- Результат — в summarization/pipeline.summarize_document().
+
+---
+
+### **7) YouTube**
+
+В youtube_processor.py:
+
+- Порядок: youtube-transcript-api (если субтитры есть) → описание → **ASR** аудио через Faster-Whisper.
+- Затем unified pipeline суммаризации (как для текста).
+
+---
+
+### **8) Тесты и smoke-скрипты**
+
+Добавь каталог tests/ с короткими проверками:
+
+- tests/test_lang_detect.py — RU/EN эвристика.
+- tests/test_chunking.py — корректная нарезка и сборка.
+- tests/test_summarize_text.py — небольшой RU и EN текст → ≤ SUM_MAX_SENTENCES.
+- tests/test_asr_local.py — 5–10 секундный RU и EN аудио-фрагмент (fixtures) → строка без пустоты.
+- tests/test_pdf_ocr.py — маленький скан-PDF (fixture) → непустой текст.
+- tests/test_web_extract.py — локальная HTML-страница (без интернета) → чистый текст.
+
+Сделай scripts/smoke.sh:
+
+```
+#!/usr/bin/env bash
+set -e
+python -m pytest -q
+python tools/cli.py summarize --text "Короткий тест на русском. 2025 год. 3 факта." --lang ru
+python tools/cli.py summarize --text "Short English test. Year 2025. 3 facts." --lang en
+```
+
+Добавь простой tools/cli.py для локальных проверок:
+
+- -text / --file / --url / --youtube → печать саммари в stdout.
+
+---
+
+### **9) Обновление README**
+
+Кратко опиши:
+
+- По умолчанию используются **бесплатные** OpenRouter-маршруты:
+    - deepseek/deepseek-chat-v3.1:free (primary)
+    - qwen/qwen-2.5-72b-instruct:free (secondary)
+- Как включить платные fallback’и (Groq) через .env.
+- Как выбрать ASR движок (faster_whisper по умолчанию, groq_whisper опционально).
+- Зависимости (tesseract, ffmpeg, paddle).
+- Команды для smoke-запуска.
+
+---
+
+### **10) Критерии готовности (Acceptance Criteria)**
+
+- При пустом/минимальном .env с одним OPENROUTER_API_KEY бот суммаризирует **RU/EN** текст, web-страницы, PDF/DOC/DOCX (включая сканы), YouTube (субтитры или через локальный ASR).
+- **По умолчанию не используется ни один платный провайдер.**
+- При ENABLE_GROQ_FALLBACK=true и наличии GROQ_API_KEY — бот может переключиться на Llama 3.3-70B без падений.
+- Для лонгридов суммаризации укладываются в SUM_MAX_SENTENCES и сохраняют ключевые факты/цифры.
+- В логах видно, какая модель использована (primary/secondary/fallback) и сколько было ретраев.
+- Все тесты и scripts/smoke.sh проходят на CPU.
+
+---
+
+### **11) Нюансы производительности**
+
+- Для faster-whisper large-v3 без GPU: используй float16 (если поддерживается) или int8 (медленнее, но экономнее по памяти).
+- Кэшируй модель Faster-Whisper и результаты транскрибации по хешу файла.
+- На OCR с PaddleOCR подрежь слишком большие страницы: downscale до разумного DPI перед распознаванием.
+
+---
+
+**Сделай все изменения, не затрагивая остальной код, и пришли diff/перечень новых файлов. Если что-то в моём проекте называется иначе — адаптируй пути и импорты, но сохрани смысл и интерфейсы.**
+
+---

@@ -44,6 +44,13 @@ dependencies = [
     "yake>=0.4.8",
     "python-dateutil>=2.9.0.post0",
     "pytz>=2024.1",
+    "faster-whisper>=1.0.3",
+    "ctranslate2>=4.3.1",
+    "paddleocr>=2.9.1",
+    "paddlepaddle>=2.6.1",
+    "openai>=1.54.0",
+    "youtube-transcript-api>=0.6.2",
+    "tiktoken>=0.8.0",
 ]
 
 [[tool.uv.index]]
