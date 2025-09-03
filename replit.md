@@ -9,13 +9,14 @@ Preferred communication style: Simple, everyday language.
 ## System Architecture
 The application follows a modular Python architecture with clear separation of concerns, designed for 24/7 operation and scalability.
 
-### Recent Updates (2025-08-22)
-- **Two-Phase Quality-First Summarization**: Implemented comprehensive pipeline with Phase A (JSON fact extraction) and Phase B (natural text generation)
-- **Enhanced Number Preservation**: 99% accuracy guarantee for critical numbers, currencies, dates, and percentages
-- **Web Tables Support**: Automatic HTML table extraction and Markdown conversion
-- **Quality Validation System**: Multi-metric scoring with preservation validation
-- **Graceful Degradation**: System works with partial dependencies through fallback mechanisms
-- **Integrated Architecture**: Unified interface combining new capabilities with existing bot functionality
+### Recent Updates (2025-09-03) - FREE-FIRST ARCHITECTURE
+- **Free-First LLM Strategy**: Migrated from paid Groq to free OpenRouter routes (deepseek/qwen) as primary engines
+- **OpenRouter Integration**: Primary/secondary free model routing with optional Groq fallback
+- **Local Faster-Whisper ASR**: Free CPU-based transcription replacing paid Groq Whisper by default  
+- **Enhanced OCR Router**: Multi-engine approach combining Tesseract + PaddleOCR for optimal text extraction
+- **Unified Summarization Pipeline**: Map-reduce chunking with language-aware processing and configurable limits
+- **Comprehensive Fallback System**: Graceful degradation across all components with detailed error handling
+- **Testing Infrastructure**: CLI tools and smoke tests for local development and validation
 
 ### Design Principles
 - **Modularity**: Clear separation of layers (Bot, AI Service, Data, Configuration).
@@ -28,9 +29,9 @@ The application follows a modular Python architecture with clear separation of c
 ### Key Components & Features
 - **Bot Layer**: Handles Telegram interactions, command processing, and message routing using `python-telegram-bot`.
 - **AI Service Layer**: Performs text summarization.
-    - **Primary Backend**: Groq API (Llama 3.3 70B Versatile).
-    - **Smart Summarization**: Advanced AI analysis with content type detection, key insight extraction, and structured output formatting.
-    - **Fallback Backend**: Local Hugging Face Transformers model (GPT-2 based) for API unavailability.
+    - **Primary Backend**: OpenRouter free routes (DeepSeek Chat v3.1, Qwen 2.5 72B) for cost-effective inference.
+    - **Smart Summarization**: Map-reduce chunking with language detection and configurable sentence limits.
+    - **Fallback Backend**: Optional Groq API (Llama 3.3 70B) when enabled, with graceful error handling.
 - **Data Layer**: Manages data persistence using SQLite (or Railway PostgreSQL for production). Stores user settings, request history, usage statistics, and detailed change logs.
 - **Configuration Layer**: Centralized configuration management using environment variables.
 - **Text Summarization**: Core functionality for arbitrary text input with both standard and smart modes.
@@ -94,12 +95,15 @@ The application follows a modular Python architecture with clear separation of c
 ## External Dependencies
 
 ### APIs
-- **Groq API**: Primary summarization service, utilizing the Llama 3.3 70B Versatile model.
+- **OpenRouter API**: Primary free summarization service using DeepSeek and Qwen free routes.
+- **Groq API**: Optional fallback for summarization and ASR (when ENABLE_GROQ_FALLBACK=true).
 - **Telegram Bot API**: For all bot interactions and message handling.
 
 ### Python Libraries
 - `python-telegram-bot`: Framework for Telegram bot development.
-- `groq`: Client for interacting with the Groq API.
+- `openai`: OpenAI-compatible client for OpenRouter and Groq APIs.
+- `faster-whisper`: Local CPU-based ASR engine for free transcription.
+- `paddleocr`: Free OCR engine for document text extraction.
 - `transformers`: Hugging Face library for the local fallback summarization model.
 - `torch`: PyTorch for local machine learning model inference.
 - `python-dotenv`: For loading environment variables.
