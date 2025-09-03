@@ -46,6 +46,16 @@ class YouTubeProcessor:
             ydl_opts = {
                 'quiet': True,
                 'no_warnings': True,
+                'extractor_args': {
+                    'youtube': {
+                        'skip': ['dash', 'hls'],
+                        'player_skip': ['configs', 'webpage'],
+                        'player_client': ['android', 'web']
+                    }
+                },
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -74,6 +84,36 @@ class YouTubeProcessor:
                 }
                 
         except Exception as e:
+            # Если основной метод не работает, пробуем альтернативный подход
+            error_str = str(e).lower()
+            if ('sign in' in error_str or 'bot' in error_str or 'cookies' in error_str or 
+                'not available on this app' in error_str or 'content is not available' in error_str):
+                logger.warning(f"⚠️ YouTube антибот защита обнаружена, пробуем альтернативный метод")
+                try:
+                    # Альтернативный метод - только основная информация
+                    simple_opts = {
+                        'quiet': True,
+                        'no_warnings': True,
+                        'format': 'worst',  # Минимальный формат
+                        'simulate': True,   # Симуляция без загрузки
+                        'http_headers': {
+                            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
+                        }
+                    }
+                    
+                    with yt_dlp.YoutubeDL(simple_opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        return {
+                            'valid': True,
+                            'title': info.get('title', 'Видео YouTube'),
+                            'duration': info.get('duration', 0),
+                            'uploader': info.get('uploader', 'Неизвестно'),
+                            'view_count': info.get('view_count', 0),
+                            'warning': 'Ограниченная информация из-за защиты YouTube'
+                        }
+                except Exception as e2:
+                    logger.error(f"Альтернативный метод также неудачен: {e2}")
+            
             return {
                 'valid': False,
                 'error': f'Ошибка при проверке видео: {str(e)}'
@@ -90,6 +130,16 @@ class YouTubeProcessor:
                 'quiet': True,
                 'no_warnings': True,
                 'skip_download': True,
+                'extractor_args': {
+                    'youtube': {
+                        'skip': ['dash', 'hls'],
+                        'player_skip': ['configs', 'webpage'],
+                        'player_client': ['android', 'web']
+                    }
+                },
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -144,6 +194,47 @@ class YouTubeProcessor:
             
         except Exception as e:
             logger.error(f"Ошибка извлечения информации о видео: {e}")
+            error_str = str(e).lower()
+            
+            # Если это антибот защита, пробуем fallback метод
+            if ('sign in' in error_str or 'bot' in error_str or 'cookies' in error_str or 
+                'not available on this app' in error_str or 'content is not available' in error_str):
+                logger.warning(f"⚠️ YouTube антибот защита, пробуем fallback без субтитров")
+                try:
+                    # Fallback: только базовая информация без субтитров
+                    simple_opts = {
+                        'quiet': True,
+                        'no_warnings': True,
+                        'skip_download': True,
+                        'simulate': True,
+                        'http_headers': {
+                            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
+                        }
+                    }
+                    
+                    with yt_dlp.YoutubeDL(simple_opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        
+                        # Используем только описание, если доступно
+                        description = info.get('description', '') or ""
+                        if description and len(description) > 50:
+                            combined_text = f"ОПИСАНИЕ ВИДЕО:\n{description[:3000]}\n\n[Субтитры недоступны из-за защиты YouTube]"
+                        else:
+                            combined_text = f"Видео: {info.get('title', 'Без названия')}\n\n[Субтитры и описание недоступны из-за защиты YouTube]"
+                        
+                        return {
+                            'success': True,
+                            'text': combined_text,
+                            'title': info.get('title', 'Видео YouTube'),
+                            'duration': info.get('duration', 0),
+                            'uploader': info.get('uploader', 'Неизвестно'),
+                            'view_count': info.get('view_count', 0),
+                            'warning': 'Ограниченные данные из-за защиты YouTube'
+                        }
+                        
+                except Exception as e2:
+                    logger.error(f"Fallback метод также неудачен: {e2}")
+            
             return {
                 'success': False,
                 'error': f'Ошибка при извлечении данных видео: {str(e)}'
