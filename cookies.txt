@@ -1,0 +1,10 @@
+# Netscape HTTP Cookie File
+# This is a generated file! Do not edit.
+#
+# Инструкция по использованию:
+# 1. Установите расширение "Get cookies.txt" для Chrome/Firefox
+# 2. Откройте youtube.com в браузере и войдите в аккаунт
+# 3. Экспортируйте cookies с помощью расширения
+# 4. Замените содержимое этого файла на экспортированные cookies
+#
+# Без cookies YouTube может блокировать доступ к видео
