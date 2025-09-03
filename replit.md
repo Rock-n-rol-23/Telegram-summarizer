@@ -9,7 +9,7 @@ Preferred communication style: Simple, everyday language.
 ## System Architecture
 The application follows a modular Python architecture with clear separation of concerns, designed for 24/7 operation and scalability.
 
-### Recent Updates (2025-09-03) - FREE-FIRST ARCHITECTURE
+### Recent Updates (2025-09-03) - FREE-FIRST ARCHITECTURE & YOUTUBE COOKIES
 - **Free-First LLM Strategy**: Migrated from paid Groq to free OpenRouter routes (deepseek/qwen) as primary engines
 - **OpenRouter Integration**: Primary/secondary free model routing with optional Groq fallback
 - **Local Faster-Whisper ASR**: Free CPU-based transcription replacing paid Groq Whisper by default  
@@ -17,6 +17,8 @@ The application follows a modular Python architecture with clear separation of c
 - **Unified Summarization Pipeline**: Map-reduce chunking with language-aware processing and configurable limits
 - **Comprehensive Fallback System**: Graceful degradation across all components with detailed error handling
 - **Testing Infrastructure**: CLI tools and smoke tests for local development and validation
+- **YouTube Cookies Support**: Added mandatory cookies.txt for YouTube processing to bypass anti-bot protection
+- **Enhanced Error Handling**: Clear user messages for expired/invalid cookies with README instructions
 
 ### Design Principles
 - **Modularity**: Clear separation of layers (Bot, AI Service, Data, Configuration).

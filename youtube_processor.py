@@ -10,12 +10,35 @@ import shutil
 import logging
 import yt_dlp
 from typing import Dict, List, Optional, Any
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 class YouTubeProcessor:
     def __init__(self, groq_client=None):
         self.groq_client = groq_client
+        self.cookies_file = Path("cookies.txt")
+        
+    def _has_valid_cookies(self) -> bool:
+        """Проверяет наличие валидных cookies"""
+        if not self.cookies_file.exists():
+            return False
+        
+        content = self.cookies_file.read_text(encoding='utf-8')
+        # Проверяем, что файл содержит реальные cookies, а не только комментарии
+        lines = [line.strip() for line in content.split('\n') if line.strip()]
+        cookie_lines = [line for line in lines if not line.startswith('#')]
+        return len(cookie_lines) > 0
+        
+    def _get_ydl_opts_with_cookies(self, base_opts: dict) -> dict:
+        """Добавляет cookies к настройкам yt-dlp если они доступны"""
+        opts = base_opts.copy()
+        if self._has_valid_cookies():
+            opts['cookiefile'] = str(self.cookies_file)
+            logger.info(f"📁 Используем cookies из {self.cookies_file}")
+        else:
+            logger.warning(f"⚠️ Cookies файл пуст или отсутствует: {self.cookies_file}")
+        return opts
         
     def extract_youtube_urls(self, text: str) -> List[Dict[str, str]]:
         """Извлекает YouTube URL из текста сообщения"""
@@ -42,8 +65,15 @@ class YouTubeProcessor:
 
     def validate_youtube_url(self, url: str) -> Dict[str, Any]:
         """Проверяет доступность YouTube видео"""
+        # Проверяем наличие cookies
+        if not self._has_valid_cookies():
+            return {
+                'valid': False,
+                'error': '❌ Необходимо добавить cookies для обработки YouTube ссылок (см. README)'
+            }
+            
         try:
-            ydl_opts = {
+            base_opts = {
                 'quiet': True,
                 'no_warnings': True,
                 'extractor_args': {
@@ -57,6 +87,8 @@ class YouTubeProcessor:
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                 }
             }
+            
+            ydl_opts = self._get_ydl_opts_with_cookies(base_opts)
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -84,35 +116,20 @@ class YouTubeProcessor:
                 }
                 
         except Exception as e:
-            # Если основной метод не работает, пробуем альтернативный подход
             error_str = str(e).lower()
-            if ('sign in' in error_str or 'bot' in error_str or 'cookies' in error_str or 
-                'not available on this app' in error_str or 'content is not available' in error_str):
-                logger.warning(f"⚠️ YouTube антибот защита обнаружена, пробуем альтернативный метод")
-                try:
-                    # Альтернативный метод - только основная информация
-                    simple_opts = {
-                        'quiet': True,
-                        'no_warnings': True,
-                        'format': 'worst',  # Минимальный формат
-                        'simulate': True,   # Симуляция без загрузки
-                        'http_headers': {
-                            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
-                        }
-                    }
-                    
-                    with yt_dlp.YoutubeDL(simple_opts) as ydl:
-                        info = ydl.extract_info(url, download=False)
-                        return {
-                            'valid': True,
-                            'title': info.get('title', 'Видео YouTube'),
-                            'duration': info.get('duration', 0),
-                            'uploader': info.get('uploader', 'Неизвестно'),
-                            'view_count': info.get('view_count', 0),
-                            'warning': 'Ограниченная информация из-за защиты YouTube'
-                        }
-                except Exception as e2:
-                    logger.error(f"Альтернативный метод также неудачен: {e2}")
+            logger.error(f"❌ Ошибка валидации YouTube: {e}")
+            
+            # Проверяем тип ошибки
+            if 'sign in' in error_str or 'bot' in error_str:
+                return {
+                    'valid': False,
+                    'error': '❌ Cookies для YouTube истекли или невалидны. Просьба обновить cookies (см. README)'
+                }
+            elif 'cookies' in error_str:
+                return {
+                    'valid': False,
+                    'error': '❌ Проблема с cookies. Просьба проверить формат файла cookies.txt'
+                }
             
             return {
                 'valid': False,
@@ -121,8 +138,15 @@ class YouTubeProcessor:
 
     def extract_video_info_and_subtitles(self, url: str, max_duration: int = 3600) -> Dict[str, Any]:
         """Извлекает информацию о видео и субтитры"""
+        # Проверяем наличие cookies
+        if not self._has_valid_cookies():
+            return {
+                'success': False,
+                'error': '❌ Необходимо добавить cookies для обработки YouTube ссылок (см. README)'
+            }
+            
         try:
-            ydl_opts = {
+            base_opts = {
                 'writesubtitles': True,
                 'writeautomaticsub': True,
                 'subtitlesformat': 'vtt',
@@ -141,6 +165,8 @@ class YouTubeProcessor:
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                 }
             }
+            
+            ydl_opts = self._get_ydl_opts_with_cookies(base_opts)
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -193,47 +219,20 @@ class YouTubeProcessor:
                 }
             
         except Exception as e:
-            logger.error(f"Ошибка извлечения информации о видео: {e}")
             error_str = str(e).lower()
+            logger.error(f"❌ Ошибка извлечения данных YouTube: {e}")
             
-            # Если это антибот защита, пробуем fallback метод
-            if ('sign in' in error_str or 'bot' in error_str or 'cookies' in error_str or 
-                'not available on this app' in error_str or 'content is not available' in error_str):
-                logger.warning(f"⚠️ YouTube антибот защита, пробуем fallback без субтитров")
-                try:
-                    # Fallback: только базовая информация без субтитров
-                    simple_opts = {
-                        'quiet': True,
-                        'no_warnings': True,
-                        'skip_download': True,
-                        'simulate': True,
-                        'http_headers': {
-                            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
-                        }
-                    }
-                    
-                    with yt_dlp.YoutubeDL(simple_opts) as ydl:
-                        info = ydl.extract_info(url, download=False)
-                        
-                        # Используем только описание, если доступно
-                        description = info.get('description', '') or ""
-                        if description and len(description) > 50:
-                            combined_text = f"ОПИСАНИЕ ВИДЕО:\n{description[:3000]}\n\n[Субтитры недоступны из-за защиты YouTube]"
-                        else:
-                            combined_text = f"Видео: {info.get('title', 'Без названия')}\n\n[Субтитры и описание недоступны из-за защиты YouTube]"
-                        
-                        return {
-                            'success': True,
-                            'text': combined_text,
-                            'title': info.get('title', 'Видео YouTube'),
-                            'duration': info.get('duration', 0),
-                            'uploader': info.get('uploader', 'Неизвестно'),
-                            'view_count': info.get('view_count', 0),
-                            'warning': 'Ограниченные данные из-за защиты YouTube'
-                        }
-                        
-                except Exception as e2:
-                    logger.error(f"Fallback метод также неудачен: {e2}")
+            # Проверяем тип ошибки
+            if 'sign in' in error_str or 'bot' in error_str:
+                return {
+                    'success': False,
+                    'error': '❌ Cookies для YouTube истекли или невалидны. Просьба обновить cookies (см. README)'
+                }
+            elif 'cookies' in error_str:
+                return {
+                    'success': False,
+                    'error': '❌ Проблема с cookies. Просьба проверить формат файла cookies.txt'
+                }
             
             return {
                 'success': False,
