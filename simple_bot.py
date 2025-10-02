@@ -2060,10 +2060,14 @@ _Чтобы вернуться к обычной суммаризации, сн�
     
     async def clear_webhook(self):
         """Очистка webhook для устранения конфликтов 409"""
+        if self.session is None:
+            logger.error("Session is None in clear_webhook - creating new session")
+            await self._create_session()
+
         try:
             url = f"{self.base_url}/deleteWebhook"
             params = {"drop_pending_updates": "true"}
-            
+
             async with self.session.post(url, params=params) as response:
                     result = await response.json()
                     if result.get("ok"):
