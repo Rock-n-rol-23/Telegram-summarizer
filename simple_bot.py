@@ -24,11 +24,37 @@ from urllib.parse import urlparse
 from functools import wraps
 
 # Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+# Используем JSON формат для production, обычный для development
+USE_JSON_LOGGING = os.getenv('USE_JSON_LOGGING', 'false').lower() == 'true'
+
+if USE_JSON_LOGGING:
+    # JSON formatter для structured logging
+    class JsonFormatter(logging.Formatter):
+        def format(self, record):
+            log_data = {
+                'timestamp': datetime.utcnow().isoformat() + 'Z',
+                'level': record.levelname,
+                'logger': record.name,
+                'message': record.getMessage(),
+                'module': record.module,
+                'function': record.funcName,
+                'line': record.lineno
+            }
+            if record.exc_info:
+                log_data['exception'] = self.formatException(record.exc_info)
+            return json.dumps(log_data, ensure_ascii=False)
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JsonFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+else:
+    # Обычный формат для development
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+
 logger = logging.getLogger(__name__)
 
 # Загружаем переменные окружения
