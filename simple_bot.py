@@ -198,6 +198,15 @@ class SimpleTelegramBot:
         self.user_requests: Dict[int, list] = {}
         self.processing_users: Set[int] = set()
 
+        # Метрики для мониторинга
+        self.metrics = {
+            'total_requests': 0,
+            'successful_requests': 0,
+            'failed_requests': 0,
+            'api_retries': 0,
+            'start_time': time.time()
+        }
+
         # Состояния пользователей для настраиваемой суммаризации
         self.user_states: Dict[int, dict] = {}
         self.user_settings: Dict[int, dict] = {}
@@ -266,6 +275,16 @@ class SimpleTelegramBot:
             self.digest_enabled = False
         
         logger.info("Simple Telegram Bot инициализирован")
+
+    def get_metrics(self) -> dict:
+        """Получить метрики бота для мониторинга"""
+        uptime = time.time() - self.metrics['start_time']
+        return {
+            **self.metrics,
+            'uptime_seconds': int(uptime),
+            'active_users': len(self.user_requests),
+            'processing_users': len(self.processing_users)
+        }
 
     async def _create_session(self):
         """Создание aiohttp сессии"""
@@ -1810,9 +1829,12 @@ _Чтобы вернуться к обычной суммаризации, сн�
     
     async def handle_update(self, update: dict):
         """Обработка обновлений от Telegram"""
+        # Инкрементируем счетчик запросов
+        self.metrics['total_requests'] += 1
+
         try:
             logger.info(f"Полученное обновление: {update}")
-            
+
             if "message" in update:
                 message = update["message"]
                 logger.info(f"Найдено сообщение в обновлении: {message}")

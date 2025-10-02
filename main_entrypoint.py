@@ -8,6 +8,7 @@ import sys
 import logging
 import signal
 import asyncio
+from datetime import datetime
 from flask import Flask, jsonify
 
 # Настройка логирования
@@ -26,14 +27,52 @@ app = Flask(__name__)
 @app.route('/ready')
 @app.route('/healthz')
 def health_check():
-    """Health check endpoint для Cloud Run"""
-    return jsonify({
-        "status": "ok", 
-        "message": "Telegram Summarization Bot - Cloud Run Ready",
+    """Extended health check endpoint с проверкой DB и API"""
+    health_status = {
+        "status": "ok",
         "service": "telegram-bot",
-        "ready": True,
-        "health": "healthy"
-    }), 200
+        "timestamp": datetime.now().isoformat(),
+        "checks": {}
+    }
+
+    all_healthy = True
+
+    # Проверка базы данных
+    try:
+        import sqlite3
+        db_url = os.getenv('DATABASE_URL', 'sqlite:///bot_database.db')
+        if db_url.startswith('sqlite:///'):
+            db_path = db_url[10:]
+            conn = sqlite3.connect(db_path, timeout=2)
+            conn.execute('SELECT 1').fetchone()
+            conn.close()
+            health_status["checks"]["database"] = {"status": "healthy", "type": "sqlite"}
+        else:
+            # PostgreSQL check
+            health_status["checks"]["database"] = {"status": "unknown", "type": "postgresql"}
+    except Exception as e:
+        health_status["checks"]["database"] = {"status": "unhealthy", "error": str(e)}
+        all_healthy = False
+
+    # Проверка Groq API key
+    groq_key = os.getenv('GROQ_API_KEY')
+    if groq_key:
+        health_status["checks"]["groq_api"] = {"status": "configured"}
+    else:
+        health_status["checks"]["groq_api"] = {"status": "not_configured"}
+        # Не считаем критичной ошибкой - есть fallback
+
+    # Проверка бота
+    if bot_instance:
+        health_status["checks"]["bot"] = {"status": "running"}
+    else:
+        health_status["checks"]["bot"] = {"status": "starting"}
+        all_healthy = False
+
+    health_status["ready"] = all_healthy
+    health_status["health"] = "healthy" if all_healthy else "degraded"
+
+    return jsonify(health_status), 200 if all_healthy else 503
 
 @app.route('/status')
 def status():
@@ -43,11 +82,32 @@ def status():
         "service": "telegram-summarization-bot",
         "features": [
             "AI text summarization",
-            "Multi-language support", 
+            "Multi-language support",
             "Groq API integration",
             "Fallback summarization"
         ]
     }), 200
+
+@app.route('/metrics')
+def metrics():
+    """Эндпоинт для метрик мониторинга"""
+    if bot_instance:
+        try:
+            bot_metrics = bot_instance.get_metrics()
+            return jsonify({
+                "status": "ok",
+                "metrics": bot_metrics
+            }), 200
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "error": str(e)
+            }), 500
+    else:
+        return jsonify({
+            "status": "unavailable",
+            "message": "Bot not initialized yet"
+        }), 503
 
 # Глобальная переменная для хранения инстанса бота
 bot_instance = None
