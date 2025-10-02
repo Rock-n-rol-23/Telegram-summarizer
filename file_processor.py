@@ -38,6 +38,21 @@ except ImportError as e:
     HAS_PPTX_SUPPORT = False
     logger.warning(f"Улучшенная поддержка PDF/PPTX недоступна: {e}")
 
+# Импорты для книжных форматов
+try:
+    import ebooklib
+    from ebooklib import epub
+    from bs4 import BeautifulSoup
+    HAS_EPUB_SUPPORT = True
+except ImportError:
+    HAS_EPUB_SUPPORT = False
+
+try:
+    import xml.etree.ElementTree as ET
+    HAS_FB2_SUPPORT = True
+except ImportError:
+    HAS_FB2_SUPPORT = False
+
 logger = logging.getLogger(__name__)
 
 class FileProcessor:
@@ -50,7 +65,11 @@ class FileProcessor:
             base_formats.append('.pptx')
         if HAS_ENHANCED_PDF_SUPPORT:
             base_formats.extend(['.png', '.jpg', '.jpeg'])  # OCR для изображений
-        
+        if HAS_EPUB_SUPPORT:
+            base_formats.append('.epub')
+        if HAS_FB2_SUPPORT:
+            base_formats.append('.fb2')
+
         self.supported_extensions = base_formats
         self.max_file_size = 20 * 1024 * 1024  # 20MB - лимит Telegram
         
@@ -345,13 +364,165 @@ class FileProcessor:
                 'success': False,
                 'error': f'Ошибка чтения TXT файла: {str(e)}'
             }
-    
+
+    def extract_text_from_epub(self, file_path: str) -> Dict[str, Any]:
+        """Извлекает текст из EPUB книги"""
+        if not HAS_EPUB_SUPPORT:
+            return {
+                'success': False,
+                'error': 'EPUB поддержка недоступна - установите ebooklib'
+            }
+
+        try:
+            logger.info(f"📚 Начинаю извлечение текста из EPUB: {file_path}")
+
+            book = epub.read_epub(file_path)
+            text_content = []
+            metadata = {}
+
+            # Извлекаем метаданные книги
+            try:
+                metadata['title'] = book.get_metadata('DC', 'title')[0][0] if book.get_metadata('DC', 'title') else 'Без названия'
+                metadata['author'] = book.get_metadata('DC', 'creator')[0][0] if book.get_metadata('DC', 'creator') else 'Неизвестный автор'
+                metadata['language'] = book.get_metadata('DC', 'language')[0][0] if book.get_metadata('DC', 'language') else 'unknown'
+            except Exception as e:
+                logger.warning(f"📚 Ошибка извлечения метаданных EPUB: {e}")
+                metadata['title'] = 'Без названия'
+                metadata['author'] = 'Неизвестный автор'
+
+            # Извлекаем текст из всех документов
+            for item in book.get_items():
+                if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                    content = item.get_content()
+                    soup = BeautifulSoup(content, 'html.parser')
+
+                    # Удаляем скрипты и стили
+                    for script in soup(['script', 'style']):
+                        script.decompose()
+
+                    # Извлекаем текст
+                    text = soup.get_text(separator=' ', strip=True)
+                    if text:
+                        text_content.append(text)
+
+            full_text = '\n\n'.join(text_content)
+
+            if not full_text or len(full_text) < 100:
+                return {
+                    'success': False,
+                    'error': 'EPUB файл не содержит текста или текст слишком короткий'
+                }
+
+            logger.info(f"📚 EPUB успешно обработан: {len(full_text)} символов")
+            logger.info(f"📚 Метаданные: {metadata['title']} - {metadata['author']}")
+
+            return {
+                'success': True,
+                'text': full_text,
+                'method': 'ebooklib',
+                'meta': metadata
+            }
+
+        except Exception as e:
+            logger.error(f"📚 Ошибка чтения EPUB: {e}")
+            return {
+                'success': False,
+                'error': f'Ошибка чтения EPUB: {str(e)}'
+            }
+
+    def extract_text_from_fb2(self, file_path: str) -> Dict[str, Any]:
+        """Извлекает текст из FB2 книги"""
+        if not HAS_FB2_SUPPORT:
+            return {
+                'success': False,
+                'error': 'FB2 поддержка недоступна - XML парсер недоступен'
+            }
+
+        try:
+            logger.info(f"📚 Начинаю извлечение текста из FB2: {file_path}")
+
+            # Читаем файл
+            with open(file_path, 'rb') as f:
+                content = f.read()
+
+            # Определяем кодировку
+            detected = chardet.detect(content)
+            encoding = detected['encoding'] or 'utf-8'
+
+            # Парсим XML
+            tree = ET.parse(file_path)
+            root = tree.getroot()
+
+            # FB2 использует namespace
+            namespaces = {'fb': 'http://www.gribuser.ru/xml/fictionbook/2.0'}
+
+            # Извлекаем метаданные
+            metadata = {}
+            try:
+                title_info = root.find('.//fb:title-info', namespaces)
+                if title_info is not None:
+                    book_title = title_info.find('fb:book-title', namespaces)
+                    metadata['title'] = book_title.text if book_title is not None else 'Без названия'
+
+                    authors = title_info.findall('.//fb:author', namespaces)
+                    author_names = []
+                    for author in authors:
+                        first_name = author.find('fb:first-name', namespaces)
+                        last_name = author.find('fb:last-name', namespaces)
+                        if first_name is not None and last_name is not None:
+                            author_names.append(f"{first_name.text} {last_name.text}")
+                    metadata['author'] = ', '.join(author_names) if author_names else 'Неизвестный автор'
+                else:
+                    metadata['title'] = 'Без названия'
+                    metadata['author'] = 'Неизвестный автор'
+            except Exception as e:
+                logger.warning(f"📚 Ошибка извлечения метаданных FB2: {e}")
+                metadata['title'] = 'Без названия'
+                metadata['author'] = 'Неизвестный автор'
+
+            # Извлекаем текст из body
+            text_parts = []
+            body = root.find('.//fb:body', namespaces)
+            if body is not None:
+                # Рекурсивно извлекаем весь текст
+                for elem in body.iter():
+                    if elem.text:
+                        text_parts.append(elem.text.strip())
+                    if elem.tail:
+                        text_parts.append(elem.tail.strip())
+
+            # Объединяем текст
+            full_text = '\n'.join([t for t in text_parts if t])
+
+            if not full_text or len(full_text) < 100:
+                return {
+                    'success': False,
+                    'error': 'FB2 файл не содержит текста или текст слишком короткий'
+                }
+
+            logger.info(f"📚 FB2 успешно обработан: {len(full_text)} символов")
+            logger.info(f"📚 Метаданные: {metadata['title']} - {metadata['author']}")
+
+            return {
+                'success': True,
+                'text': full_text,
+                'method': 'xml.etree',
+                'meta': metadata
+            }
+
+        except Exception as e:
+            logger.error(f"📚 Ошибка чтения FB2: {e}")
+            return {
+                'success': False,
+                'error': f'Ошибка чтения FB2: {str(e)}'
+            }
+
     def extract_text_from_file(self, file_path: str, file_extension: str) -> Dict[str, Any]:
         """Универсальная функция извлечения текста из файлов"""
-        
+
         # Нормализуем расширение
         extension = file_extension.lower()
-        
+
         # Выбираем метод в зависимости от расширения
         if extension == '.pdf':
             return self.extract_text_from_pdf(file_path)
@@ -365,6 +536,10 @@ class FileProcessor:
             return self.extract_text_from_doc(file_path)
         elif extension == '.txt':
             return self.extract_text_from_txt(file_path)
+        elif extension == '.epub':
+            return self.extract_text_from_epub(file_path)
+        elif extension == '.fb2':
+            return self.extract_text_from_fb2(file_path)
         else:
             return {
                 'success': False,

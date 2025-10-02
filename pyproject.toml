@@ -51,6 +51,7 @@ dependencies = [
     "openai>=1.54.0",
     "youtube-transcript-api>=0.6.2",
     "tiktoken>=0.8.0",
+    "ebooklib>=0.18",
 ]
 
 [[tool.uv.index]]
