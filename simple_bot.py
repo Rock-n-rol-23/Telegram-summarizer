@@ -74,6 +74,7 @@ from utils.tg_audio import (
 
 # Импорт утилит для обработки текста
 from bot.text_utils import extract_text_from_message
+from bot.state_manager import StateManager, UserStep
 
 # Импорт интегрированной системы суммаризации
 try:
@@ -206,12 +207,17 @@ class SimpleTelegramBot:
         }
 
         # Состояния пользователей для настраиваемой суммаризации
+        # TODO: Legacy dictionaries - постепенно мигрируем на StateManager
         self.user_states: Dict[int, dict] = {}
         self.user_settings: Dict[int, dict] = {}
 
         # Временное хранение сообщений для объединения
         self.user_messages_buffer: Dict[int, list] = {}
-        
+
+        # Новый менеджер состояний (параллельно со старыми словарями)
+        self.state_manager = StateManager()
+        logger.info("StateManager инициализирован")
+
         # Инициализация базы данных
         from database import DatabaseManager
         from concurrent.futures import ThreadPoolExecutor
@@ -789,15 +795,16 @@ class SimpleTelegramBot:
         """Обработка команды /smart - переключение в режим умной суммаризации"""
         chat_id = update["message"]["chat"]["id"]
         user_id = update["message"]["from"]["id"]
-        
-        # Устанавливаем флаг умной суммаризации для пользователя
+
+        # Используем StateManager для управления smart_mode
+        state = self.state_manager.get_state(user_id)
+        state.smart_mode = not state.smart_mode
+        new_mode = state.smart_mode
+
+        # Синхронизация с legacy словарем (временно для обратной совместимости)
         if user_id not in self.user_settings:
             self.user_settings[user_id] = {}
-        
-        # Переключаем режим умной суммаризации
-        current_mode = self.user_settings[user_id].get("smart_mode", False)
-        self.user_settings[user_id]["smart_mode"] = not current_mode
-        new_mode = self.user_settings[user_id]["smart_mode"]
+        self.user_settings[user_id]["smart_mode"] = new_mode
         
         if new_mode:
             mode_text = """🧠 **Умная суммаризация включена!**
