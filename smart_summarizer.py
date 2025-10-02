@@ -6,14 +6,18 @@ import logging
 import re
 from typing import Dict, List, Optional, Tuple
 from groq import Groq
+from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
 class SmartSummarizer:
     """Класс для интеллектуальной суммаризации с извлечением ключевых моментов"""
-    
-    def __init__(self, groq_client: Groq):
+
+    def __init__(self, groq_client: Groq, openrouter_client: Optional[AsyncOpenAI] = None,
+                 openrouter_model: str = "deepseek/deepseek-chat-v3.1:free"):
         self.groq_client = groq_client
+        self.openrouter_client = openrouter_client
+        self.openrouter_model = openrouter_model
         
     def analyze_content_type(self, text: str, source_type: str = "text") -> str:
         """Анализирует тип контента для выбора подходящей стратегии суммаризации"""
@@ -112,31 +116,62 @@ class SmartSummarizer:
             
             # Создаем анализ ключевых инсайтов с учетом уровня сжатия
             insights_prompt = self._create_insights_prompt(text, entities, compression_ratio)
-            
-            insights_response = self.groq_client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "Ты эксперт по извлечению ключевых инсайтов. Выдели самые важные факты, решения и выводы."
-                    },
-                    {
-                        "role": "user",
-                        "content": insights_prompt
-                    }
-                ],
-                model="llama-3.3-70b-versatile",
-                max_tokens=500,
-                temperature=0.1
-            )
-            
-            key_insights = insights_response.choices[0].message.content.strip() if insights_response.choices[0].message.content else "Нет инсайтов"
-            
+
+            key_insights = "Нет инсайтов"
+
+            # Пытаемся использовать Groq, при ошибке переходим на OpenRouter
+            try:
+                insights_response = self.groq_client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "Ты эксперт по извлечению ключевых инсайтов. Выдели самые важные факты, решения и выводы."
+                        },
+                        {
+                            "role": "user",
+                            "content": insights_prompt
+                        }
+                    ],
+                    model="llama-3.3-70b-versatile",
+                    max_tokens=500,
+                    temperature=0.1
+                )
+                key_insights = insights_response.choices[0].message.content.strip() if insights_response.choices[0].message.content else "Нет инсайтов"
+
+            except Exception as groq_error:
+                logger.warning(f"Groq недоступен: {groq_error}. Переключаюсь на OpenRouter...")
+
+                if self.openrouter_client:
+                    try:
+                        insights_response = await self.openrouter_client.chat.completions.create(
+                            model=self.openrouter_model,
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": "Ты эксперт по извлечению ключевых инсайтов. Выдели самые важные факты, решения и выводы."
+                                },
+                                {
+                                    "role": "user",
+                                    "content": insights_prompt
+                                }
+                            ],
+                            max_tokens=500,
+                            temperature=0.1
+                        )
+                        key_insights = insights_response.choices[0].message.content.strip() if insights_response.choices[0].message.content else "Нет инсайтов"
+                        logger.info("✓ Использован OpenRouter для умного анализа")
+                    except Exception as openrouter_error:
+                        logger.error(f"OpenRouter также недоступен: {openrouter_error}")
+                        raise Exception(f"Groq: {groq_error}, OpenRouter: {openrouter_error}")
+                else:
+                    raise groq_error
+
             return {
                 "content_type": content_type,
                 "key_insights": key_insights,
                 "entities": entities
             }
-            
+
         except Exception as e:
             logger.error(f"Ошибка умной суммаризации: {e}")
             return {

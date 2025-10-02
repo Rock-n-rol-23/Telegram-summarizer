@@ -190,15 +190,22 @@ class SimpleTelegramBot:
 
         # Инициализация OpenRouter клиента (fallback для Groq)
         self.openrouter_client = None
+        self.openrouter_async_client = None
         openrouter_api_key = os.getenv('OPENROUTER_API_KEY')
+        openrouter_model = os.getenv('OPENROUTER_PRIMARY_MODEL', 'deepseek/deepseek-chat-v3.1:free')
+        self.openrouter_model = openrouter_model
         if openrouter_api_key:
             try:
-                from openai import OpenAI
+                from openai import OpenAI, AsyncOpenAI
                 self.openrouter_client = OpenAI(
                     api_key=openrouter_api_key,
                     base_url="https://openrouter.ai/api/v1"
                 )
-                logger.info("OpenRouter API клиент инициализирован (fallback)")
+                self.openrouter_async_client = AsyncOpenAI(
+                    api_key=openrouter_api_key,
+                    base_url="https://openrouter.ai/api/v1"
+                )
+                logger.info(f"OpenRouter API клиенты инициализированы (модель: {openrouter_model})")
             except (ValueError, KeyError, ImportError) as e:
                 logger.error(f"Ошибка инициализации OpenRouter API: {e}")
 
@@ -264,8 +271,12 @@ class SimpleTelegramBot:
         
         # Инициализация умного суммаризатора
         if self.groq_client:
-            self.smart_summarizer = SmartSummarizer(groq_client=self.groq_client)
-            logger.info("Умный суммаризатор инициализирован")
+            self.smart_summarizer = SmartSummarizer(
+                groq_client=self.groq_client,
+                openrouter_client=self.openrouter_async_client,
+                openrouter_model=self.openrouter_model
+            )
+            logger.info("Умный суммаризатор инициализирован с поддержкой OpenRouter fallback")
         else:
             self.smart_summarizer = None
             logger.warning("Умный суммаризатор не инициализирован - отсутствует Groq API key")
@@ -576,16 +587,17 @@ class SimpleTelegramBot:
                     messages=messages,
                     model=model,
                     temperature=temperature,
-                    max_tokens=max_tokens
+                    max_tokens=max_tokens,
+                    timeout=10  # Таймаут 10 секунд для быстрого переключения на OpenRouter
                 )
                 return response.choices[0].message.content
             except Exception as e:
                 error_msg = str(e)
                 logger.warning(f"Groq API ошибка: {error_msg}")
 
-                # Проверяем, это rate limit?
-                if "rate" in error_msg.lower() or "limit" in error_msg.lower() or "429" in error_msg:
-                    logger.info("Groq rate limit достигнут, переключаюсь на OpenRouter...")
+                # Проверяем, это rate limit или таймаут?
+                if "rate" in error_msg.lower() or "limit" in error_msg.lower() or "429" in error_msg or "timeout" in error_msg.lower():
+                    logger.info("Groq недоступен (rate limit/timeout), переключаюсь на OpenRouter...")
                 else:
                     # Если это не rate limit - пробрасываем ошибку
                     raise
