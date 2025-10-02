@@ -21,6 +21,18 @@ import requests
 from bs4 import BeautifulSoup
 import validators
 from urllib.parse import urlparse
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
+
+# Загружаем переменные окружения
+load_dotenv()
+
 # from readability import parse  # Убрано из-за проблем с установкой
 from youtube_processor import YouTubeProcessor
 from file_processor import FileProcessor
@@ -33,17 +45,6 @@ from utils.tg_audio import (
     is_audio_document,
 )
 
-# Настройка логирования (должно быть раньше всех импортов)
-import logging
-import sys
-
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger(__name__)
-
 # Импорт интегрированной системы суммаризации
 try:
     from integrated_summarizer import IntegratedSummarizer, get_integrated_summarizer
@@ -52,11 +53,6 @@ try:
 except ImportError as e:
     INTEGRATED_SUMMARIZATION_AVAILABLE = False
     logger.warning(f"Интегрированная система суммаризации недоступна: {e}")
-
-# Загружаем переменные окружения
-load_dotenv()
-
-# Logger уже определен выше
 
 # Импорты для улучшенной аудио обработки
 try:
