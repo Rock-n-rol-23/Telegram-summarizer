@@ -188,6 +188,20 @@ class SimpleTelegramBot:
             except (ValueError, KeyError, ImportError) as e:
                 logger.error(f"Ошибка инициализации Groq API: {e}")
 
+        # Инициализация OpenRouter клиента (fallback для Groq)
+        self.openrouter_client = None
+        openrouter_api_key = os.getenv('OPENROUTER_API_KEY')
+        if openrouter_api_key:
+            try:
+                from openai import OpenAI
+                self.openrouter_client = OpenAI(
+                    api_key=openrouter_api_key,
+                    base_url="https://openrouter.ai/api/v1"
+                )
+                logger.info("OpenRouter API клиент инициализирован (fallback)")
+            except (ValueError, KeyError, ImportError) as e:
+                logger.error(f"Ошибка инициализации OpenRouter API: {e}")
+
         # Базовый URL для Telegram API
         self.base_url = f"https://api.telegram.org/bot{self.token}"
 
@@ -535,25 +549,71 @@ class SimpleTelegramBot:
         now = time.time()
         if user_id not in self.user_requests:
             self.user_requests[user_id] = []
-        
+
         # Удаляем запросы старше 1 минуты
         self.user_requests[user_id] = [
-            req_time for req_time in self.user_requests[user_id] 
+            req_time for req_time in self.user_requests[user_id]
             if now - req_time < 60
         ]
-        
+
         # Проверяем лимит (10 запросов в минуту)
         if len(self.user_requests[user_id]) >= 10:
             return False
-        
+
         self.user_requests[user_id].append(now)
         return True
+
+    def call_llm(self, messages: list, model: str = "llama-3.3-70b-versatile", temperature: float = 0.3, max_tokens: int = 4096):
+        """
+        Универсальный метод для вызова LLM с автоматическим fallback
+
+        Сначала пробует Groq, при ошибке (rate limit) переключается на OpenRouter
+        """
+        # Пробуем Groq
+        if self.groq_client:
+            try:
+                response = self.groq_client.chat.completions.create(
+                    messages=messages,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                error_msg = str(e)
+                logger.warning(f"Groq API ошибка: {error_msg}")
+
+                # Проверяем, это rate limit?
+                if "rate" in error_msg.lower() or "limit" in error_msg.lower() or "429" in error_msg:
+                    logger.info("Groq rate limit достигнут, переключаюсь на OpenRouter...")
+                else:
+                    # Если это не rate limit - пробрасываем ошибку
+                    raise
+
+        # Fallback на OpenRouter
+        if self.openrouter_client:
+            try:
+                # Используем бесплатную модель от OpenRouter
+                response = self.openrouter_client.chat.completions.create(
+                    model="meta-llama/llama-3.1-8b-instruct:free",  # Бесплатная модель
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+                logger.info("Использован OpenRouter (fallback)")
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.error(f"OpenRouter API ошибка: {e}")
+                raise
+
+        # Если ничего не доступно
+        raise RuntimeError("Ни Groq, ни OpenRouter API не доступны")
     
     async def summarize_text(self, text: str, target_ratio: float = 0.3) -> str:
-        """Суммаризация текста с помощью Groq API"""
-        if not self.groq_client:
-            return "❌ Groq API недоступен. Пожалуйста, проверьте настройки."
-        
+        """Суммаризация текста с помощью LLM API (Groq или OpenRouter fallback)"""
+        if not self.groq_client and not self.openrouter_client:
+            return "❌ LLM API недоступен. Пожалуйста, проверьте настройки."
+
         try:
             # Дополнительная нормализация текста перед отправкой в API
             try:
@@ -562,16 +622,16 @@ class SimpleTelegramBot:
                 text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)  # Удаляем управляющие символы
                 text = re.sub(r'\s+', ' ', text)  # Заменяем множественные пробелы
                 text = text.strip()
-                
+
                 if not text:
                     return "❌ Текст пуст после нормализации"
-                    
+
             except (RuntimeError, ValueError) as norm_error:
                 logger.warning(f"Ошибка при дополнительной нормализации: {norm_error}")
                 # Продолжаем с исходным текстом
-            
+
             target_length = int(len(text) * target_ratio)
-            
+
             prompt = f"""Ты - эксперт по суммаризации текстов. Создай краткое саммари следующего текста на том же языке, что и исходный текст.
 
 Требования:
@@ -585,26 +645,18 @@ class SimpleTelegramBot:
 Текст для суммаризации:
 {text}"""
 
-            # Используем retry для устойчивости к временным сбоям API
-            @retry_on_failure(max_retries=3, delay=1.0, backoff=2.0)
-            def call_groq_api():
-                return self.groq_client.chat.completions.create(
-                    messages=[{"role": "user", "content": prompt}],
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.3,
-                    max_tokens=2000,
-                    top_p=0.9,
-                    stream=False
-                )
+            # Используем универсальный метод с fallback
+            summary = self.call_llm(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                temperature=0.3,
+                max_tokens=2000
+            )
 
-            response = call_groq_api()
-            
-            if response.choices and response.choices[0].message:
-                summary = response.choices[0].message.content
-                if summary:
-                    return summary.strip()
+            if summary:
+                return summary.strip()
             return "❌ Не удалось получить ответ от модели"
-            
+
         except Exception as e:
             logger.error(f"Ошибка при суммаризации: {e}")
             import traceback
