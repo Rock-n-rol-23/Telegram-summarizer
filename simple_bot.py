@@ -112,7 +112,7 @@ class SimpleTelegramBot:
             try:
                 self.groq_client = Groq(api_key=self.groq_api_key)
                 logger.info("Groq API клиент инициализирован")
-            except Exception as e:
+            except (ValueError, KeyError, ImportError) as e:
                 logger.error(f"Ошибка инициализации Groq API: {e}")
 
         # Базовый URL для Telegram API
@@ -167,7 +167,7 @@ class SimpleTelegramBot:
             try:
                 init_settings_manager(self.db)
                 logger.info("Менеджер настроек аудио инициализирован")
-            except Exception as e:
+            except (sqlite3.Error, ValueError) as e:
                 logger.warning(f"Ошибка инициализации настроек аудио: {e}")
         
         # Инициализация системы дайджестов
@@ -363,7 +363,7 @@ class SimpleTelegramBot:
         try:
             settings = self.db.get_user_settings(user_id)
             return settings.get('compression_level', 30)  # По умолчанию 30%
-        except Exception as e:
+        except (sqlite3.Error, ValueError) as e:
             logger.error(f"Ошибка получения настроек пользователя {user_id}: {e}")
             return 30
 
@@ -373,7 +373,7 @@ class SimpleTelegramBot:
             logger.info(f"SimpleTelegramBot: начинаю обновление уровня сжатия для пользователя {user_id}: {compression_level}%")
             self.db.update_compression_level(user_id, compression_level, username)
             logger.info(f"SimpleTelegramBot: уровень сжатия для пользователя {user_id} успешно обновлен: {compression_level}%")
-        except Exception as e:
+        except (sqlite3.Error, ValueError) as e:
             logger.error(f"SimpleTelegramBot: ошибка обновления уровня сжатия для пользователя {user_id}: {e}")
             raise
 
@@ -408,7 +408,7 @@ class SimpleTelegramBot:
                 else:
                     logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {result}")
                 return result
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {e}")
             return None
     
@@ -450,7 +450,7 @@ class SimpleTelegramBot:
                 if not text:
                     return "❌ Текст пуст после нормализации"
                     
-            except Exception as norm_error:
+            except (RuntimeError, ValueError) as norm_error:
                 logger.warning(f"Ошибка при дополнительной нормализации: {norm_error}")
                 # Продолжаем с исходным текстом
             
@@ -648,7 +648,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
         
         try:
             user_stats = self.db.get_user_stats(user_id)
-        except Exception as e:
+        except (sqlite3.Error, ValueError) as e:
             logger.error(f"Ошибка получения статистики пользователя {user_id}: {e}")
             user_stats = {
                 'total_requests': 0,
@@ -831,7 +831,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             try:
                 # username = update["message"]["from"].get("username", "")
                 self.db.save_user_request(user_id, "", total_chars, len(summary), 0.0, 'groq')
-            except Exception as save_error:
+            except (OSError, sqlite3.Error) as save_error:
                 logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
             
             # Очищаем состояние пользователя
@@ -842,7 +842,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             if user_id in self.user_messages_buffer:
                 del self.user_messages_buffer[user_id]
                 
-        except Exception as e:
+        except (sqlite3.Error, ValueError) as e:
             logger.error(f"Ошибка выполнения настраиваемой суммаризации: {e}")
             await self.send_message(chat_id, "❌ Произошла ошибка при суммаризации. Попробуйте позже.")
     
@@ -1004,7 +1004,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 # Сохраняем запрос в базу данных
                 try:
                     self.db.save_user_request(user_id, username, len(text), len(summary), processing_time, 'groq')
-                except Exception as save_error:
+                except (OSError, sqlite3.Error) as save_error:
                     logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
                 
                 # Вычисляем статистику
@@ -1038,7 +1038,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 
                 logger.error(f"Не удалось обработать текст пользователя {user_id}")
         
-        except Exception as e:
+        except (sqlite3.Error, ValueError) as e:
             logger.error(f"Ошибка при обработке текста пользователя {user_id}: {str(e)}")
             
             await self.send_message(chat_id, f"❌ Произошла ошибка!\n\nПожалуйста, попробуйте позже.")
@@ -1203,7 +1203,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     # Сохраняем в базу данных
                     try:
                         self.db.save_user_request(user_id, f"document:{file_name}", len(extracted_text), len(summary), 0.0, 'groq_document')
-                    except Exception as save_error:
+                    except (OSError, sqlite3.Error) as save_error:
                         logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
                     
                     logger.info(f"Успешно обработан документ {file_name} пользователя {user_id}")
@@ -1213,7 +1213,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         await self.delete_message(chat_id, processing_message_id)
                     await self.send_message(chat_id, "❌ Ошибка при создании резюме документа!\n\nПопробуйте позже или обратитесь к администратору.")
                     
-            except Exception as e:
+            except (sqlite3.Error, ValueError) as e:
                 logger.error(f"Ошибка при обработке документа: {e}")
                 if processing_message_id:
                     await self.delete_message(chat_id, processing_message_id)
@@ -1236,7 +1236,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             async with self.session as session:
                 async with session.get(url, params=params) as response:
                     return await response.json()
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка получения информации о файле: {e}")
             return None
     
@@ -1370,12 +1370,12 @@ _Чтобы вернуться к обычной суммаризации, сн�
             try:
                 audio_duration = duration or 0.0  # Убедимся, что duration не None
                 self.db.save_user_request(user_id, f"audio:{filename_hint}", len(transcript), len(summary), float(audio_duration), 'groq_whisper')
-            except Exception as save_error:
+            except (OSError, sqlite3.Error) as save_error:
                 logger.error(f"Ошибка сохранения аудио запроса в БД: {save_error}")
             
             logger.info(f"🎵 Успешно обработан аудио {filename_hint} пользователя {user_id}")
                 
-        except Exception as e:
+        except (sqlite3.Error, ValueError) as e:
             logger.exception("Ошибка при обработке аудио")
             error_msg = f"❌ Ошибка при обработке аудио: {e}"
             if processing_message_id:
@@ -1586,7 +1586,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             try:
                 username = message["from"].get("username", "")
                 self.db.save_user_request(user_id, username, len(transcript), len(summary) if summary else 0, 0.0, 'audio_processing')
-            except Exception as e:
+            except (sqlite3.Error, ValueError) as e:
                 logger.error(f"Ошибка сохранения в БД: {e}")
         
         except Exception as e:
@@ -1616,7 +1616,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             async with self.session as session:
                 async with session.post(url, json=data) as response:
                     return await response.json()
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка редактирования сообщения: {e}")
             return None
     
@@ -1917,7 +1917,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                                     # Сохраняем запрос в базу данных
                                     try:
                                         self.db.save_user_request(user_id, username, len(text), len(summary), processing_time, 'groq')
-                                    except Exception as save_error:
+                                    except (OSError, sqlite3.Error) as save_error:
                                         logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
                                     
                                     # Вычисляем статистику
@@ -1951,7 +1951,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                                     
                                     logger.error(f"Не удалось обработать текст пользователя {user_id}")
                             
-                            except Exception as e:
+                            except (sqlite3.Error, ValueError) as e:
                                 logger.error(f"Ошибка при обработке текста пользователя {user_id}: {str(e)}")
                                 await self.send_message(chat_id, f"❌ Произошла ошибка!\n\nПожалуйста, попробуйте позже.")
                             
@@ -2032,7 +2032,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                                 logger.info(f"📨 GET_UPDATES: Получено сообщение от {msg.get('from', {}).get('id', 'unknown')}: {msg.get('text', msg.get('caption', 'no_text'))[:50]}")
                     
                     return result
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"❌ GET_UPDATES ERROR: Ошибка получения обновлений: {e}")
             import traceback
             logger.error(f"🔍 GET_UPDATES TRACEBACK: {traceback.format_exc()}")
@@ -2053,7 +2053,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     else:
                         logger.warning(f"Не удалось удалить webhook: {result}")
                         return False
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка при удалении webhook: {e}")
             return False
 
@@ -2077,7 +2077,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         await self.delete_message(chat_id, message_id)
                         logger.info(f"Пользовательские клавиатуры очищены для чата {chat_id}")
                     
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка при очистке клавиатур: {e}")
 
     async def setup_bot_commands(self):
@@ -2125,7 +2125,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     else:
                         logger.warning(f"Не удалось установить команды: {result}")
                         
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка при установке команд бота: {e}")
     
     async def clear_all_commands(self):
@@ -2141,7 +2141,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     else:
                         logger.warning(f"Не удалось удалить команды: {result}")
                         
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка при удалении команд: {e}")
 
     async def run(self):
@@ -2170,7 +2170,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     logger.error("Не удалось подключиться к Telegram API")
                     await self._close_session()
                     return
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка проверки подключения: {e}")
             await self._close_session()
             return
@@ -2209,9 +2209,13 @@ _Чтобы вернуться к обычной суммаризации, сн�
 
                     await asyncio.sleep(0.1)
 
-                except Exception as e:
+                except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError, KeyError) as e:
                     logger.error(f"Ошибка в основном цикле: {e}")
                     await asyncio.sleep(5)
+                except Exception as e:
+                    # Непредвиденные ошибки - логируем с трейсбеком
+                    logger.exception(f"Критическая ошибка в основном цикле: {e}")
+                    await asyncio.sleep(10)
         finally:
             # Graceful shutdown - закрываем HTTP сессию
             logger.info("Остановка бота...")
@@ -2311,7 +2315,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         # Сохраняем запрос в базу данных
                         try:
                             self.db.save_user_request(user_id, username, len(content_result['content']), len(summary), processing_time, 'groq_web')
-                        except Exception as save_error:
+                        except (OSError, sqlite3.Error) as save_error:
                             logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
                         
                         # Вычисляем статистику
@@ -2373,7 +2377,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         
                         logger.info(f"🔗 Обработан URL с fallback {i+1}/{len(urls_to_process)}: {url}")
                     
-                except Exception as e:
+                except (sqlite3.Error, ValueError) as e:
                     logger.error(f"Ошибка при обработке URL {url}: {str(e)}")
                     await self.send_message(
                         chat_id,
@@ -2430,7 +2434,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 async with session.post(url, json=data) as response:
                     result = await response.json()
                     return result.get("ok", False)
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка удаления сообщения: {e}")
             return False
     
@@ -2565,7 +2569,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         processing_time, 
                         'groq_youtube'
                     )
-                except Exception as save_error:
+                except (OSError, sqlite3.Error) as save_error:
                     logger.error(f"Ошибка сохранения YouTube запроса в БД: {save_error}")
                 
                 # Формируем финальный ответ
@@ -2611,7 +2615,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     "❌ Не удалось создать резюме видео\n\nПопробуйте другое видео или обратитесь к администратору."
                 )
                 
-        except Exception as e:
+        except (sqlite3.Error, ValueError) as e:
             logger.error(f"Критическая ошибка при обработке YouTube видео: {str(e)}")
             await self.edit_message(
                 chat_id, processing_message_id,
@@ -2658,7 +2662,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     if not result.get("ok"):
                         logger.warning(f"Не удалось отредактировать сообщение: {result}")
                     return result
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка редактирования сообщения: {e}")
             return None
 
