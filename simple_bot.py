@@ -215,6 +215,9 @@ class SimpleTelegramBot:
         # Временное хранение сообщений для объединения
         self.user_messages_buffer: Dict[int, list] = {}
 
+        # Кэш исходных текстов для пересоздания саммари (message_id -> original_text)
+        self.text_cache: Dict[int, str] = {}
+
         # Новый менеджер состояний (параллельно со старыми словарями)
         self.state_manager = StateManager()
         logger.info("StateManager инициализирован")
@@ -842,13 +845,21 @@ class SimpleTelegramBot:
         
         await self.send_message(chat_id, stats_text)
 
-    def get_compression_keyboard(self, current_level: int = None) -> dict:
-        """Создание inline клавиатуры для выбора уровня сжатия"""
+    def get_compression_keyboard(self, current_level: int = None, message_id: int = None) -> dict:
+        """Создание inline клавиатуры для выбора уровня сжатия
+
+        Args:
+            current_level: Текущий уровень сжатия (для отметки галочкой)
+            message_id: ID сообщения с саммари (для пересоздания при нажатии кнопки)
+        """
+        # Если message_id передан, добавляем его в callback_data
+        suffix = f"_{message_id}" if message_id else ""
+
         buttons = [
             [
-                {"text": "\U0001F525 Кратко" + (" ✓" if current_level == 15 else ""), "callback_data": "compression_15"},
-                {"text": "\U0001F4CA Сбалансированно" + (" ✓" if current_level == 30 else ""), "callback_data": "compression_30"},
-                {"text": "\U0001F4D6 Подробно" + (" ✓" if current_level == 50 else ""), "callback_data": "compression_50"}
+                {"text": "\U0001F525 Кратко" + (" ✓" if current_level == 15 else ""), "callback_data": f"compression_15{suffix}"},
+                {"text": "\U0001F4CA Сбалансированно" + (" ✓" if current_level == 30 else ""), "callback_data": f"compression_30{suffix}"},
+                {"text": "\U0001F4D6 Подробно" + (" ✓" if current_level == 50 else ""), "callback_data": f"compression_50{suffix}"}
             ]
         ]
         return {"inline_keyboard": buttons}
@@ -862,12 +873,16 @@ class SimpleTelegramBot:
             callback_data = callback_query["data"]
             message = callback_query.get("message", {})
             chat_id = message.get("chat", {}).get("id")
+            summary_message_id = message.get("message_id")
 
             logger.info(f"Callback query от {user_id}: {callback_data}")
 
             # Обработка кнопок сжатия
             if callback_data.startswith("compression_"):
-                compression_level = int(callback_data.split("_")[1])
+                # Парсим callback_data: compression_15_4918 -> level=15, message_id=4918
+                parts = callback_data.split("_")
+                compression_level = int(parts[1])
+                original_message_id = int(parts[2]) if len(parts) > 2 else None
 
                 # Обновляем уровень сжатия в БД
                 self.update_user_compression_level(user_id, compression_level, username)
@@ -880,24 +895,69 @@ class SimpleTelegramBot:
                 }
                 level_name = level_names.get(compression_level, f"{compression_level}%")
 
-                # Отправляем уведомление (всплывающее окно)
-                await self.answer_callback_query(query_id, f"Выбран стиль: {level_name}")
+                # Если есть оригинальный текст в кэше - пересоздаем саммари
+                if original_message_id and original_message_id in self.text_cache:
+                    original_text = self.text_cache[original_message_id]
+                    logger.info(f"Пересоздание саммари для message_id={original_message_id}, уровень={compression_level}%")
 
-                # Обновляем сообщение с новыми кнопками (галочка на выбранной)
-                updated_text = (
-                    f"\u2705 Стиль саммаризации изменён: {level_name}\n\n"
-                    f"Теперь твои тексты будут обрабатываться в стиле \"{level_name}\".\n\n"
-                    f"\U0001F4DD Просто отправь текст, статью или документ!\n\n"
-                    f"\U0001F4A1 Используй кнопки ниже для быстрого переключения стиля:"
-                )
+                    # Отправляем уведомление
+                    await self.answer_callback_query(query_id, f"Пересоздаю саммари: {level_name}...")
 
-                keyboard = self.get_compression_keyboard(current_level=compression_level)
-                await self.edit_message(chat_id, message["message_id"], updated_text, reply_markup=keyboard)
+                    # Показываем "обработка..."
+                    processing_text = f"\u23F3 Пересоздаю саммари с уровнем {level_name}..."
+                    await self.edit_message(chat_id, summary_message_id, processing_text)
 
-                logger.info(f"Пользователь {user_id} изменил сжатие на {compression_level}% через кнопку")
+                    # Пересоздаем саммари
+                    start_time = time.time()
+                    smart_mode = self.user_settings.get(user_id, {}).get("smart_mode", True)
+
+                    if smart_mode and self.smart_summarizer:
+                        target_ratio = compression_level / 100.0
+                        smart_result = await self.smart_summarizer.smart_summarize(
+                            original_text, source_type="text",
+                            source_name="текстовое сообщение",
+                            compression_ratio=target_ratio
+                        )
+                        processing_time = time.time() - start_time
+                        summary = self.smart_summarizer.format_smart_response(
+                            smart_result, "текстовое сообщение", len(original_text), processing_time
+                        )
+                    else:
+                        target_ratio = compression_level / 100.0
+                        summary = await self.summarize_text(original_text, target_ratio=target_ratio)
+                        processing_time = time.time() - start_time
+
+                    # Формируем новое сообщение
+                    compression_ratio = len(summary) / len(original_text)
+                    updated_text = f"""📋 Саммари готово! (Уровень сжатия: {compression_level}%)
+
+{summary}
+
+📊 Статистика:
+• Исходный текст: {len(original_text):,} символов
+• Саммари: {len(summary):,} символов
+• Сжатие: {compression_ratio:.1%}
+• Время обработки: {processing_time:.1f}с"""
+
+                    # Обновляем сообщение с новым саммари и кнопками
+                    keyboard = self.get_compression_keyboard(current_level=compression_level, message_id=original_message_id)
+                    await self.edit_message(chat_id, summary_message_id, updated_text, reply_markup=keyboard)
+
+                    logger.info(f"Саммари пересоздано для пользователя {user_id}, уровень {compression_level}%")
+
+                else:
+                    # Если текста нет в кэше - просто обновляем кнопки
+                    await self.answer_callback_query(query_id, f"Выбран стиль: {level_name}")
+                    keyboard = self.get_compression_keyboard(current_level=compression_level)
+                    # Просто обновляем кнопки без изменения текста
+                    current_text = message.get("text", "")
+                    await self.edit_message(chat_id, summary_message_id, current_text, reply_markup=keyboard)
+                    logger.info(f"Пользователь {user_id} изменил стиль на {compression_level}% (текст не в кэше)")
 
         except Exception as e:
             logger.error(f"Ошибка обработки callback query: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             # Пытаемся ответить на callback чтобы убрать "часики" у пользователя
             try:
                 await self.answer_callback_query(callback_query["id"], "Произошла ошибка")
@@ -906,7 +966,7 @@ class SimpleTelegramBot:
 
     async def answer_callback_query(self, query_id: str, text: str = "", show_alert: bool = False):
         """Отправка ответа на callback query"""
-        url = f"{self.api_url}/answerCallbackQuery"
+        url = f"{self.base_url}/answerCallbackQuery"
         data = {
             "callback_query_id": query_id,
             "text": text,
@@ -942,13 +1002,11 @@ class SimpleTelegramBot:
             confirmation_text = (
                 f"\u2705 Стиль саммаризации изменён: {level_name}\n\n"
                 f"Теперь твои тексты будут обрабатываться в стиле \"{level_name}\".\n\n"
-                f"\U0001F4DD Просто отправь текст, статью или документ!\n\n"
-                f"\U0001F4A1 Используй кнопки ниже для быстрого переключения стиля:"
+                f"\U0001F4DD Просто отправь текст, статью или документ!"
             )
 
-            # Отправляем с inline кнопками
-            keyboard = self.get_compression_keyboard(current_level=compression_level)
-            await self.send_message(chat_id, confirmation_text, reply_markup=keyboard)
+            # Отправляем без inline кнопок (кнопки будут под каждым саммари)
+            await self.send_message(chat_id, confirmation_text)
             logger.info(f"Пользователь {user_id} изменил уровень сжатия на {compression_level}%")
 
         except Exception as e:
@@ -2347,12 +2405,23 @@ class SimpleTelegramBot:
 • Саммари: {len(summary):,} символов
 • Сжатие: {compression_ratio:.1%}
 • Время обработки: {processing_time:.1f}с"""
-                                    
+
                                     # Удаляем сообщение о обработке
                                     if processing_message_id:
                                         await self.delete_message(chat_id, processing_message_id)
-                                    
-                                    await self.send_message(chat_id, response_text)
+
+                                    # Отправляем саммари БЕЗ кнопок (добавим их после получения message_id)
+                                    sent_message = await self.send_message(chat_id, response_text)
+
+                                    # Сохраняем исходный текст в кэш и добавляем кнопки
+                                    if sent_message and sent_message.get("ok"):
+                                        message_id = sent_message["result"]["message_id"]
+                                        self.text_cache[message_id] = text
+                                        logger.info(f"Сохранен текст в кэш для message_id={message_id}, длина={len(text)}")
+
+                                        # Редактируем сообщение, добавляя кнопки с message_id в callback_data
+                                        keyboard = self.get_compression_keyboard(current_level=user_compression_level, message_id=message_id)
+                                        await self.edit_message(chat_id, message_id, response_text, reply_markup=keyboard)
                                     
                                     logger.info(f"Успешно обработан текст пользователя {user_id}, сжатие: {compression_ratio:.1%}")
                                     
