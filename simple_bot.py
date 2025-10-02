@@ -748,6 +748,8 @@ class SimpleTelegramBot:
             "\U0001F4AC Остались вопросы? Просто начни отправлять контент!"
         )
 
+        await self.send_message(chat_id, help_text)
+
     async def handle_audio_settings_command(self, update: dict):
         """Обработка команды настроек аудио"""
         if not ENHANCED_AUDIO_AVAILABLE:
@@ -840,6 +842,82 @@ class SimpleTelegramBot:
         
         await self.send_message(chat_id, stats_text)
 
+    def get_compression_keyboard(self, current_level: int = None) -> dict:
+        """Создание inline клавиатуры для выбора уровня сжатия"""
+        buttons = [
+            [
+                {"text": "\U0001F525 Кратко" + (" ✓" if current_level == 15 else ""), "callback_data": "compression_15"},
+                {"text": "\U0001F4CA Сбалансированно" + (" ✓" if current_level == 30 else ""), "callback_data": "compression_30"},
+                {"text": "\U0001F4D6 Подробно" + (" ✓" if current_level == 50 else ""), "callback_data": "compression_50"}
+            ]
+        ]
+        return {"inline_keyboard": buttons}
+
+    async def handle_callback_query(self, callback_query: dict):
+        """Обработка нажатий на inline кнопки"""
+        try:
+            query_id = callback_query["id"]
+            user_id = callback_query["from"]["id"]
+            username = callback_query["from"].get("username", "")
+            callback_data = callback_query["data"]
+            message = callback_query.get("message", {})
+            chat_id = message.get("chat", {}).get("id")
+
+            logger.info(f"Callback query от {user_id}: {callback_data}")
+
+            # Обработка кнопок сжатия
+            if callback_data.startswith("compression_"):
+                compression_level = int(callback_data.split("_")[1])
+
+                # Обновляем уровень сжатия в БД
+                self.update_user_compression_level(user_id, compression_level, username)
+
+                # Названия уровней
+                level_names = {
+                    15: "\U0001F525 Кратко",
+                    30: "\U0001F4CA Сбалансированно",
+                    50: "\U0001F4D6 Подробно"
+                }
+                level_name = level_names.get(compression_level, f"{compression_level}%")
+
+                # Отправляем уведомление (всплывающее окно)
+                await self.answer_callback_query(query_id, f"Выбран стиль: {level_name}")
+
+                # Обновляем сообщение с новыми кнопками (галочка на выбранной)
+                updated_text = (
+                    f"\u2705 Стиль саммаризации изменён: {level_name}\n\n"
+                    f"Теперь твои тексты будут обрабатываться в стиле \"{level_name}\".\n\n"
+                    f"\U0001F4DD Просто отправь текст, статью или документ!\n\n"
+                    f"\U0001F4A1 Используй кнопки ниже для быстрого переключения стиля:"
+                )
+
+                keyboard = self.get_compression_keyboard(current_level=compression_level)
+                await self.edit_message(chat_id, message["message_id"], updated_text, reply_markup=keyboard)
+
+                logger.info(f"Пользователь {user_id} изменил сжатие на {compression_level}% через кнопку")
+
+        except Exception as e:
+            logger.error(f"Ошибка обработки callback query: {e}")
+            # Пытаемся ответить на callback чтобы убрать "часики" у пользователя
+            try:
+                await self.answer_callback_query(callback_query["id"], "Произошла ошибка")
+            except:
+                pass
+
+    async def answer_callback_query(self, query_id: str, text: str = "", show_alert: bool = False):
+        """Отправка ответа на callback query"""
+        url = f"{self.api_url}/answerCallbackQuery"
+        data = {
+            "callback_query_id": query_id,
+            "text": text,
+            "show_alert": show_alert
+        }
+        async with self.session.post(url, json=data) as response:
+            result = await response.json()
+            if not result.get("ok"):
+                logger.error(f"Ошибка answerCallbackQuery: {result}")
+            return result
+
     async def handle_compression_command(self, update: dict, compression_level: int):
         """Обработка команд уровня детальности саммари"""
         chat_id = update["message"]["chat"]["id"]
@@ -854,32 +932,28 @@ class SimpleTelegramBot:
 
             # Понятные названия уровней
             level_names = {
-                10: "🔥 Ультра-кратко",
-                15: "🔥 Кратко",
-                30: "📊 Сбалансированно",
-                50: "📖 Подробно"
+                10: "\U0001F525 Ультра-кратко",
+                15: "\U0001F525 Кратко",
+                30: "\U0001F4CA Сбалансированно",
+                50: "\U0001F4D6 Подробно"
             }
             level_name = level_names.get(compression_level, f"{compression_level}%")
 
-            confirmation_text = f"""✅ Стиль саммаризации изменён: {level_name}
+            confirmation_text = (
+                f"\u2705 Стиль саммаризации изменён: {level_name}\n\n"
+                f"Теперь твои тексты будут обрабатываться в стиле \"{level_name}\".\n\n"
+                f"\U0001F4DD Просто отправь текст, статью или документ!\n\n"
+                f"\U0001F4A1 Используй кнопки ниже для быстрого переключения стиля:"
+            )
 
-Теперь твои тексты будут обрабатываться в стиле "{level_name}".
-
-📝 Просто отправь текст, статью или документ!
-
-🎛️ Другие стили:
-• /short — кратко (главные мысли)
-• /balanced — сбалансированно (рекомендуется)
-• /detailed — подробно (всё важное)
-
-💡 /help — полная справка"""
-
-            await self.send_message(chat_id, confirmation_text)
+            # Отправляем с inline кнопками
+            keyboard = self.get_compression_keyboard(current_level=compression_level)
+            await self.send_message(chat_id, confirmation_text, reply_markup=keyboard)
             logger.info(f"Пользователь {user_id} изменил уровень сжатия на {compression_level}%")
-            
+
         except Exception as e:
             logger.error(f"Ошибка обработки команды сжатия {compression_level}% для пользователя {user_id}: {e}")
-            await self.send_message(chat_id, "❌ Произошла ошибка при изменении настроек. Попробуйте еще раз.")
+            await self.send_message(chat_id, "\u274C Произошла ошибка при изменении настроек. Попробуйте еще раз.")
     
 
     
@@ -2071,6 +2145,11 @@ class SimpleTelegramBot:
         try:
             logger.info(f"Полученное обновление: {update}")
 
+            # Обработка callback_query (inline кнопки)
+            if "callback_query" in update:
+                await self.handle_callback_query(update["callback_query"])
+                return
+
             if "message" in update:
                 message = update["message"]
                 logger.info(f"Найдено сообщение в обновлении: {message}")
@@ -2962,13 +3041,13 @@ class SimpleTelegramBot:
             # Удаляем пользователя из списка обрабатываемых
             self.processing_users.discard(user_id)
 
-    async def edit_message(self, chat_id: int, message_id: int, text: str):
+    async def edit_message(self, chat_id: int, message_id: int, text: str, reply_markup: Optional[dict] = None):
         """Редактирование существующего сообщения"""
         if not message_id:
             return
-            
+
         url = f"{self.base_url}/editMessageText"
-        
+
         # Сначала пробуем с Markdown форматированием
         data = {
             "chat_id": chat_id,
@@ -2977,6 +3056,9 @@ class SimpleTelegramBot:
             "parse_mode": "Markdown",
             "disable_web_page_preview": True
         }
+
+        if reply_markup:
+            data["reply_markup"] = reply_markup
         
         try:
             async with self.session.post(url, json=data) as response:
@@ -2991,6 +3073,8 @@ class SimpleTelegramBot:
                             "text": text[:4096],
                             "disable_web_page_preview": True
                         }
+                        if reply_markup:
+                            data_plain["reply_markup"] = reply_markup
                         async with self.session.post(url, json=data_plain) as response_plain:
                             result = await response_plain.json()
                     
