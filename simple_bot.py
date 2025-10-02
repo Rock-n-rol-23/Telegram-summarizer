@@ -134,9 +134,13 @@ class SimpleTelegramBot:
         
         # Инициализация базы данных
         from database import DatabaseManager
+        from concurrent.futures import ThreadPoolExecutor
         database_url = os.getenv('DATABASE_URL', 'sqlite:///bot_database.db')
         self.db = DatabaseManager(database_url)
         self.db.init_database()
+
+        # Executor для синхронных DB операций (избегаем блокировки event loop)
+        self.db_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="db_")
         
         # Инициализация YouTube процессора
         self.youtube_processor = YouTubeProcessor(groq_client=self.groq_client)
@@ -202,6 +206,19 @@ class SimpleTelegramBot:
         if self.session and not self.session.closed:
             await self.session.close()
             logger.info("HTTP сессия закрыта")
+
+    async def _run_in_executor(self, func, *args):
+        """Запуск синхронной функции в executor (для DB операций)"""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.db_executor, func, *args)
+
+    async def _shutdown(self):
+        """Полное закрытие всех ресурсов"""
+        logger.info("Закрытие ресурсов бота...")
+        await self._close_session()
+        if hasattr(self, 'db_executor'):
+            self.db_executor.shutdown(wait=True)
+            logger.info("DB executor остановлен")
 
     def extract_urls_from_message(self, text: str) -> list:
         """Извлекает все URL из текста сообщения"""
@@ -358,10 +375,10 @@ class SimpleTelegramBot:
         
         return summary
     
-    def get_user_compression_level(self, user_id: int) -> int:
-        """Получение уровня сжатия пользователя из базы данных"""
+    async def get_user_compression_level(self, user_id: int) -> int:
+        """Получение уровня сжатия пользователя из базы данных (async)"""
         try:
-            settings = self.db.get_user_settings(user_id)
+            settings = await self._run_in_executor(self.db.get_user_settings, user_id)
             return settings.get('compression_level', 30)  # По умолчанию 30%
         except (sqlite3.Error, ValueError) as e:
             logger.error(f"Ошибка получения настроек пользователя {user_id}: {e}")
@@ -830,7 +847,11 @@ _Чтобы вернуться к обычной суммаризации, сн�
             # Сохраняем статистику
             try:
                 # username = update["message"]["from"].get("username", "")
-                self.db.save_user_request(user_id, "", total_chars, len(summary), 0.0, 'groq')
+                # Используем executor для неблокирующей записи в БД
+                await self._run_in_executor(
+                    self.db.save_user_request,
+                    user_id, "", total_chars, len(summary), 0.0, 'groq'
+                )
             except (OSError, sqlite3.Error) as save_error:
                 logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
             
@@ -992,7 +1013,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             start_time = time.time()
             
             # Получаем уровень сжатия пользователя из базы данных
-            user_compression_level = self.get_user_compression_level(user_id)
+            user_compression_level = await self.get_user_compression_level(user_id)
             target_ratio = user_compression_level / 100.0
             
             # Выполняем суммаризацию с пользовательскими настройками
@@ -1001,9 +1022,12 @@ _Чтобы вернуться к обычной суммаризации, сн�
             processing_time = time.time() - start_time
             
             if summary and not summary.startswith("❌"):
-                # Сохраняем запрос в базу данных
+                # Сохраняем запрос в базу данных (неблокирующая запись)
                 try:
-                    self.db.save_user_request(user_id, username, len(text), len(summary), processing_time, 'groq')
+                    await self._run_in_executor(
+                        self.db.save_user_request,
+                        user_id, username, len(text), len(summary), processing_time, 'groq'
+                    )
                 except (OSError, sqlite3.Error) as save_error:
                     logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
                 
@@ -1159,7 +1183,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     await self.edit_message(chat_id, processing_message_id, f"📄 Обрабатываю документ: {file_name}\n\n{ocr_info}\n\n🤖 Создаю резюме...")
                 
                 # Получаем уровень сжатия пользователя
-                compression_ratio = self.get_user_compression_level(user_id)
+                compression_ratio = await self.get_user_compression_level(user_id)
                 
                 # Суммаризируем извлеченный текст
                 summary = await self.summarize_file_content(extracted_text, file_name, download_result["file_extension"], compression_ratio)
@@ -1329,7 +1353,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             summary = None
             if hasattr(self, "smart_summarizer") and self.smart_summarizer:
                 try:
-                    compression_level = self.get_user_compression_level(user_id)
+                    compression_level = await self.get_user_compression_level(user_id)
                     target_ratio = compression_level / 100.0
                     
                     smart_result = await self.smart_summarizer.smart_summarize(
@@ -1533,7 +1557,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             summary = None
             if hasattr(self, "smart_summarizer") and self.smart_summarizer:
                 try:
-                    compression_level = self.get_user_compression_level(user_id)
+                    compression_level = await self.get_user_compression_level(user_id)
                     target_ratio = compression_level / 100.0
                     
                     smart_result = await self.smart_summarizer.smart_summarize(
@@ -1552,7 +1576,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             if not summary and self.groq_client:
                 try:
                     # Используем существующий метод suммаризации
-                    compression_level = self.get_user_compression_level(user_id)
+                    compression_level = await self.get_user_compression_level(user_id)
                     target_ratio = compression_level / 100.0
                     summary = await self.summarize_text(transcript, target_ratio)
                 except Exception as e:
@@ -1894,7 +1918,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                                 
                                 if smart_mode and self.smart_summarizer:
                                     # Умная суммаризация
-                                    user_compression_level = self.get_user_compression_level(user_id)
+                                    user_compression_level = await self.get_user_compression_level(user_id)
                                     target_ratio = user_compression_level / 100.0
                                     
                                     smart_result = await self.smart_summarizer.smart_summarize(
@@ -1908,7 +1932,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                                     )
                                 else:
                                     # Обычная суммаризация
-                                    user_compression_level = self.get_user_compression_level(user_id)
+                                    user_compression_level = await self.get_user_compression_level(user_id)
                                     target_ratio = user_compression_level / 100.0
                                     summary = await self.summarize_text(text, target_ratio=target_ratio)
                                     processing_time = time.time() - start_time
@@ -2217,9 +2241,9 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     logger.exception(f"Критическая ошибка в основном цикле: {e}")
                     await asyncio.sleep(10)
         finally:
-            # Graceful shutdown - закрываем HTTP сессию
+            # Graceful shutdown - закрываем все ресурсы
             logger.info("Остановка бота...")
-            await self._close_session()
+            await self._shutdown()
     
     async def handle_url_message(self, update: dict, urls: list):
         """Обработчик сообщений с URL для суммаризации веб-страниц"""
@@ -2302,7 +2326,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                         continue
                     
                     # Получаем уровень сжатия пользователя
-                    user_compression_level = self.get_user_compression_level(user_id)
+                    user_compression_level = await self.get_user_compression_level(user_id)
                     target_ratio = user_compression_level / 100.0
                     
                     # Суммаризируем с помощью AI
@@ -2540,7 +2564,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             )
             
             # Получаем уровень сжатия пользователя
-            user_compression_level = self.get_user_compression_level(user_id)
+            user_compression_level = await self.get_user_compression_level(user_id)
             
             summary_result = self.youtube_processor.summarize_youtube_content(
                 content_result['text'],
