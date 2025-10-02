@@ -10,7 +10,7 @@ import json
 import time
 import re
 from datetime import datetime
-from typing import Dict, Set, Optional
+from typing import Dict, Set, Optional, Callable, Any
 import os
 import sys
 import aiohttp
@@ -21,6 +21,7 @@ import requests
 from bs4 import BeautifulSoup
 import validators
 from urllib.parse import urlparse
+from functools import wraps
 
 # Настройка логирования
 logging.basicConfig(
@@ -95,6 +96,52 @@ WELCOME_MESSAGE_HTML = """👋 Привет! Я превращаю длинны�
 • 📝 <b>Суммаризация:</b> DeepSeek Chat v3.1 & Qwen 2.5 72B — мощные модели для русского и английского
 • 🗣️ <b>Распознавание речи:</b> Faster-Whisper — локальная обработка аудио без лимитов
 • 🔍 <b>OCR:</b> Tesseract + PaddleOCR — извлечение текста из изображений и PDF"""
+
+
+# ============================================================================
+# Retry decorator для API вызовов
+# ============================================================================
+
+def retry_on_failure(max_retries: int = 3, delay: float = 1.0, backoff: float = 2.0):
+    """
+    Декоратор для retry с экспоненциальным backoff
+
+    Args:
+        max_retries: Максимальное количество попыток
+        delay: Начальная задержка в секундах
+        backoff: Множитель для экспоненциального backoff
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            current_delay = delay
+            last_exception = None
+
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    # Проверяем, стоит ли повторять
+                    if attempt < max_retries - 1:
+                        # Логируем только для важных ошибок
+                        error_msg = str(e).lower()
+                        if any(keyword in error_msg for keyword in ['rate limit', 'timeout', 'connection', 'temporary']):
+                            logger.warning(f"Попытка {attempt + 1}/{max_retries} не удалась: {e}. Повтор через {current_delay:.1f}s")
+                            time.sleep(current_delay)
+                            current_delay *= backoff
+                        else:
+                            # Не повторяем для критичных ошибок (invalid key, etc)
+                            raise
+                    else:
+                        logger.error(f"Все {max_retries} попыток исчерпаны")
+
+            # Если все попытки исчерпаны, пробрасываем последнюю ошибку
+            raise last_exception
+
+        return wrapper
+    return decorator
+
 
 class SimpleTelegramBot:
     """Простой Telegram бот для суммаризации текста"""
@@ -484,15 +531,20 @@ class SimpleTelegramBot:
 
 Текст для суммаризации:
 {text}"""
-            
-            response = self.groq_client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="llama-3.3-70b-versatile",
-                temperature=0.3,
-                max_tokens=2000,
-                top_p=0.9,
-                stream=False
-            )
+
+            # Используем retry для устойчивости к временным сбоям API
+            @retry_on_failure(max_retries=3, delay=1.0, backoff=2.0)
+            def call_groq_api():
+                return self.groq_client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model="llama-3.3-70b-versatile",
+                    temperature=0.3,
+                    max_tokens=2000,
+                    top_p=0.9,
+                    stream=False
+                )
+
+            response = call_groq_api()
             
             if response.choices and response.choices[0].message:
                 summary = response.choices[0].message.content
@@ -905,15 +957,19 @@ _Чтобы вернуться к обычной суммаризации, сн�
 {text}"""
             
             if self.groq_client:
-                response = self.groq_client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="llama-3.3-70b-versatile",
-                temperature=0.3,
-                max_tokens=2000,
-                top_p=0.9,
-                stream=False
-            )
-            
+                @retry_on_failure(max_retries=3, delay=1.0, backoff=2.0)
+                def call_groq_api():
+                    return self.groq_client.chat.completions.create(
+                        messages=[{"role": "user", "content": prompt}],
+                        model="llama-3.3-70b-versatile",
+                        temperature=0.3,
+                        max_tokens=2000,
+                        top_p=0.9,
+                        stream=False
+                    )
+
+                response = call_groq_api()
+
             if response.choices and response.choices[0].message:
                 summary = response.choices[0].message.content
                 if summary:
@@ -1372,11 +1428,16 @@ _Чтобы вернуться к обычной суммаризации, сн�
                     "Сохраняй только факты, действия, решения, даты и цифры.\n\n"
                     f"СТЕНОГРАММА:\n{transcript}"
                 )
-                resp = self.groq_client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.2,
-                    messages=[{"role":"user","content": prompt}]
-                )
+
+                @retry_on_failure(max_retries=3, delay=1.0, backoff=2.0)
+                def call_groq_api():
+                    return self.groq_client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        temperature=0.2,
+                        messages=[{"role":"user","content": prompt}]
+                    )
+
+                resp = call_groq_api()
                 summary = resp.choices[0].message.content.strip()
             elif not summary:
                 # Если нет API - простая заглушка
@@ -1697,15 +1758,19 @@ _Чтобы вернуться к обычной суммаризации, сн�
 
 Содержимое документа:
 {text}"""
-            
-            response = self.groq_client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="llama-3.3-70b-versatile",
-                temperature=0.3,
-                max_tokens=max_tokens,
-                top_p=0.9,
-                stream=False
-            )
+
+            @retry_on_failure(max_retries=3, delay=1.0, backoff=2.0)
+            def call_groq_api():
+                return self.groq_client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model="llama-3.3-70b-versatile",
+                    temperature=0.3,
+                    max_tokens=max_tokens,
+                    top_p=0.9,
+                    stream=False
+                )
+
+            response = call_groq_api()
             
             if response.choices and response.choices[0].message:
                 summary = response.choices[0].message.content
