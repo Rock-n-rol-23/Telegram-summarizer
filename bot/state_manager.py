@@ -33,17 +33,18 @@ class UserState:
         last_activity: Время последней активности
     """
     step: UserStep = UserStep.IDLE
-    compression: Optional[str] = None
+    compression: Optional[str] = "30"
     format: Optional[str] = "bullets"
-    smart_mode: bool = False
+    smart_mode: bool = True
     messages_buffer: List[Dict[str, Any]] = field(default_factory=list)
     last_activity: datetime = field(default_factory=datetime.now)
 
     def reset(self):
         """Сброс состояния пользователя к начальному."""
         self.step = UserStep.IDLE
-        self.compression = None
+        self.compression = "30"
         self.format = "bullets"
+        self.smart_mode = True
         self.messages_buffer = []
         self.last_activity = datetime.now()
 
