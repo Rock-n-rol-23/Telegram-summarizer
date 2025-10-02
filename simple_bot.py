@@ -422,8 +422,8 @@ class SimpleTelegramBot:
             if result.get("ok"):
                 logger.info(f"Сообщение успешно отправлено в чат {chat_id}")
             else:
-                    logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {result}")
-                return result
+                logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {result}")
+            return result
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {e}")
             return None
