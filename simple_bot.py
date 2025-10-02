@@ -102,10 +102,10 @@ class SimpleTelegramBot:
     def __init__(self):
         self.token = os.getenv('TELEGRAM_BOT_TOKEN')
         self.groq_api_key = os.getenv('GROQ_API_KEY')
-        
+
         if not self.token:
             raise ValueError("TELEGRAM_BOT_TOKEN не найден в переменных окружения")
-        
+
         # Инициализация Groq клиента
         self.groq_client = None
         if self.groq_api_key:
@@ -114,18 +114,21 @@ class SimpleTelegramBot:
                 logger.info("Groq API клиент инициализирован")
             except Exception as e:
                 logger.error(f"Ошибка инициализации Groq API: {e}")
-        
+
         # Базовый URL для Telegram API
         self.base_url = f"https://api.telegram.org/bot{self.token}"
-        
+
+        # Централизованная aiohttp сессия (будет создана при запуске)
+        self.session: Optional[aiohttp.ClientSession] = None
+
         # Защита от спама
         self.user_requests: Dict[int, list] = {}
         self.processing_users: Set[int] = set()
-        
+
         # Состояния пользователей для настраиваемой суммаризации
         self.user_states: Dict[int, dict] = {}
         self.user_settings: Dict[int, dict] = {}
-        
+
         # Временное хранение сообщений для объединения
         self.user_messages_buffer: Dict[int, list] = {}
         
@@ -186,7 +189,20 @@ class SimpleTelegramBot:
             self.digest_enabled = False
         
         logger.info("Simple Telegram Bot инициализирован")
-    
+
+    async def _create_session(self):
+        """Создание aiohttp сессии"""
+        if self.session is None or self.session.closed:
+            timeout = aiohttp.ClientTimeout(total=60, connect=10)
+            self.session = aiohttp.ClientSession(timeout=timeout)
+            logger.info("HTTP сессия создана")
+
+    async def _close_session(self):
+        """Закрытие aiohttp сессии"""
+        if self.session and not self.session.closed:
+            await self.session.close()
+            logger.info("HTTP сессия закрыта")
+
     def extract_urls_from_message(self, text: str) -> list:
         """Извлекает все URL из текста сообщения"""
         # Паттерн для поиска URL
@@ -378,7 +394,7 @@ class SimpleTelegramBot:
         logger.info(f"📤 SEND_MESSAGE: Отправка сообщения в чат {chat_id}")
         
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self.session as session:
                 # Используем json=data когда есть reply_markup, иначе data=data
                 if reply_markup:
                     async with session.post(url, json=data) as response:
@@ -1217,7 +1233,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             url = f"{self.base_url}/getFile"
             params = {"file_id": file_id}
             
-            async with aiohttp.ClientSession() as session:
+            async with self.session as session:
                 async with session.get(url, params=params) as response:
                     return await response.json()
         except Exception as e:
@@ -1597,7 +1613,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 "parse_mode": "Markdown"
             }
             
-            async with aiohttp.ClientSession() as session:
+            async with self.session as session:
                 async with session.post(url, json=data) as response:
                     return await response.json()
         except Exception as e:
@@ -2003,7 +2019,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
         logger.info(f"🔄 GET_UPDATES: Allowed updates: {params['allowed_updates']}")
         
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self.session as session:
                 async with session.get(url, params=params) as response:
                     result = await response.json()
                     
@@ -2028,7 +2044,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             url = f"{self.base_url}/deleteWebhook"
             params = {"drop_pending_updates": "true"}
             
-            async with aiohttp.ClientSession() as session:
+            async with self.session as session:
                 async with session.post(url, params=params) as response:
                     result = await response.json()
                     if result.get("ok"):
@@ -2051,7 +2067,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 "reply_markup": json.dumps({"remove_keyboard": True})
             }
             
-            async with aiohttp.ClientSession() as session:
+            async with self.session as session:
                 async with session.post(url, data=data) as response:
                     result = await response.json()
                     if result.get("ok"):
@@ -2101,7 +2117,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             url = f"{self.base_url}/setMyCommands"
             data = {"commands": json.dumps(commands)}
             
-            async with aiohttp.ClientSession() as session:
+            async with self.session as session:
                 async with session.post(url, data=data) as response:
                     result = await response.json()
                     if result.get("ok"):
@@ -2117,7 +2133,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
         try:
             url = f"{self.base_url}/deleteMyCommands"
             
-            async with aiohttp.ClientSession() as session:
+            async with self.session as session:
                 async with session.post(url) as response:
                     result = await response.json()
                     if result.get("ok"):
@@ -2131,66 +2147,75 @@ _Чтобы вернуться к обычной суммаризации, сн�
     async def run(self):
         """Запуск бота"""
         logger.info("Запуск Simple Telegram Bot")
-        
+
+        # Создаем HTTP сессию
+        await self._create_session()
+
         # Очищаем webhook для предотвращения конфликтов 409
         await self.clear_webhook()
         await asyncio.sleep(2)  # Даем время на очистку
-        
+
         # Устанавливаем команды бота
         await self.setup_bot_commands()
-        
+
         # Проверяем подключение к Telegram API
         try:
             url = f"{self.base_url}/getMe"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    me_response = await response.json()
-                    if me_response and me_response.get("ok"):
-                        bot_info = me_response.get("result", {})
-                        logger.info(f"Подключение к Telegram API успешно. Бот: {bot_info.get('first_name', 'Unknown')}")
-                    else:
-                        logger.error("Не удалось подключиться к Telegram API")
-                        return
+            async with self.session.get(url) as response:
+                me_response = await response.json()
+                if me_response and me_response.get("ok"):
+                    bot_info = me_response.get("result", {})
+                    logger.info(f"Подключение к Telegram API успешно. Бот: {bot_info.get('first_name', 'Unknown')}")
+                else:
+                    logger.error("Не удалось подключиться к Telegram API")
+                    await self._close_session()
+                    return
         except Exception as e:
             logger.error(f"Ошибка проверки подключения: {e}")
+            await self._close_session()
             return
         
         offset = None
-        
+
         logger.info("Бот запущен и готов к работе!")
-        
-        while True:
-            try:
-                updates = await self.get_updates(offset=offset, timeout=30)
-                
-                if updates and updates.get("ok"):
-                    update_list = updates.get("result", [])
-                    if update_list:
-                        logger.info(f"Получено {len(update_list)} обновлений")
-                    
-                    for update in update_list:
-                        logger.info(f"Обработка обновления: {update.get('update_id')}")
-                        await self.handle_update(update)
-                        offset = update["update_id"] + 1
-                        logger.info(f"Обновлен offset: {offset}")
-                else:
-                    if updates:
-                        error_code = updates.get("error_code")
-                        if error_code == 409:
-                            # Конфликт с другим экземпляром бота
-                            logger.warning("Обнаружен конфликт 409 - другой экземпляр бота активен")
-                            logger.info("Очистка webhook и повторная попытка...")
-                            await self.clear_webhook()
-                            await asyncio.sleep(5)  # Увеличенная пауза для разрешения конфликта
-                            continue
-                        else:
-                            logger.error(f"Ошибка получения обновлений: {updates}")
-                
-                await asyncio.sleep(0.1)
-                
-            except Exception as e:
-                logger.error(f"Ошибка в основном цикле: {e}")
-                await asyncio.sleep(5)
+
+        try:
+            while True:
+                try:
+                    updates = await self.get_updates(offset=offset, timeout=30)
+
+                    if updates and updates.get("ok"):
+                        update_list = updates.get("result", [])
+                        if update_list:
+                            logger.info(f"Получено {len(update_list)} обновлений")
+
+                        for update in update_list:
+                            logger.info(f"Обработка обновления: {update.get('update_id')}")
+                            await self.handle_update(update)
+                            offset = update["update_id"] + 1
+                            logger.info(f"Обновлен offset: {offset}")
+                    else:
+                        if updates:
+                            error_code = updates.get("error_code")
+                            if error_code == 409:
+                                # Конфликт с другим экземпляром бота
+                                logger.warning("Обнаружен конфликт 409 - другой экземпляр бота активен")
+                                logger.info("Очистка webhook и повторная попытка...")
+                                await self.clear_webhook()
+                                await asyncio.sleep(5)  # Увеличенная пауза для разрешения конфликта
+                                continue
+                            else:
+                                logger.error(f"Ошибка получения обновлений: {updates}")
+
+                    await asyncio.sleep(0.1)
+
+                except Exception as e:
+                    logger.error(f"Ошибка в основном цикле: {e}")
+                    await asyncio.sleep(5)
+        finally:
+            # Graceful shutdown - закрываем HTTP сессию
+            logger.info("Остановка бота...")
+            await self._close_session()
     
     async def handle_url_message(self, update: dict, urls: list):
         """Обработчик сообщений с URL для суммаризации веб-страниц"""
@@ -2401,7 +2426,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 "message_id": message_id
             }
             
-            async with aiohttp.ClientSession() as session:
+            async with self.session as session:
                 async with session.post(url, json=data) as response:
                     result = await response.json()
                     return result.get("ok", False)
@@ -2614,7 +2639,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
         }
         
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self.session as session:
                 async with session.post(url, json=data) as response:
                     result = await response.json()
                     
