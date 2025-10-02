@@ -2423,7 +2423,7 @@ class SimpleTelegramBot:
         url = f"{self.base_url}/getUpdates"
         params = {
             "timeout": timeout,
-            "allowed_updates": ["message", "channel_post", "edited_channel_post"]
+            "allowed_updates": ["message", "channel_post", "edited_channel_post", "callback_query"]
         }
         
         if offset:
