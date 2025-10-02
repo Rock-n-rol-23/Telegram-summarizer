@@ -1847,23 +1847,6 @@ _Чтобы вернуться к обычной суммаризации, сн�
             # Убираем пользователя из списка обрабатываемых
             self.processing_users.discard(user_id)
     
-    async def edit_message(self, chat_id: int, message_id: int, text: str):
-        """Редактирует существующее сообщение"""
-        try:
-            url = f"{self.base_url}/editMessageText"
-            data = {
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "text": text,
-                "parse_mode": "Markdown"
-            }
-            
-            async with self.session.post(url, json=data) as response:
-                    return await response.json()
-        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
-            logger.error(f"Ошибка редактирования сообщения: {e}")
-            return None
-    
     def _detect_document_type(self, text: str, file_name: str = "", file_extension: str = "", metadata: dict = None) -> str:
         """Определяет тип документа для адаптивной саммаризации"""
         # Книжные форматы имеют приоритет
@@ -3089,7 +3072,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                             "text": text[:4096],
                             "disable_web_page_preview": True
                         }
-                        async with session.post(url, json=data_plain) as response_plain:
+                        async with self.session.post(url, json=data_plain) as response_plain:
                             result = await response_plain.json()
                     
                     if not result.get("ok"):
@@ -3098,59 +3081,6 @@ _Чтобы вернуться к обычной суммаризации, сн�
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка редактирования сообщения: {e}")
             return None
-
-    async def run(self):
-        """Запуск бота"""
-        logger.info("🚀 Запуск Simple Telegram Bot")
-        
-        # Очистка webhook
-        await self.clear_webhook()
-        
-        # Настройка команд
-        await self.setup_bot_commands()
-        
-        # Основной цикл обработки сообщений
-        offset = None
-        consecutive_errors = 0
-        max_consecutive_errors = 10
-        
-        while True:
-            try:
-                updates = await self.get_updates(offset)
-                
-                if updates and updates.get("ok"):
-                    consecutive_errors = 0
-                    
-                    for update in updates.get("result", []):
-                        try:
-                            await self.handle_update(update)
-                            offset = update["update_id"] + 1
-                        except Exception as e:
-                            logger.error(f"Ошибка обработки update {update.get('update_id', 'unknown')}: {str(e)}")
-                            offset = update.get("update_id", 0) + 1
-                else:
-                    consecutive_errors += 1
-                    if consecutive_errors >= max_consecutive_errors:
-                        logger.error(f"Слишком много ошибок подряд ({consecutive_errors}). Перезапуск через 30 секунд...")
-                        await asyncio.sleep(30)
-                        consecutive_errors = 0
-                    else:
-                        await asyncio.sleep(2)
-            
-            except KeyboardInterrupt:
-                logger.info("Получен сигнал остановки")
-                break
-            except Exception as e:
-                consecutive_errors += 1
-                logger.error(f"Ошибка в основном цикле: {str(e)}")
-                
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.error(f"Критическое количество ошибок ({consecutive_errors}). Остановка бота.")
-                    break
-                
-                await asyncio.sleep(5)
-        
-        logger.info("Simple Telegram Bot остановлен")
 
 async def main():
     """Главная функция"""
