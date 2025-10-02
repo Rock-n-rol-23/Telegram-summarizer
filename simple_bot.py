@@ -857,9 +857,9 @@ class SimpleTelegramBot:
 
         buttons = [
             [
-                {"text": "\U0001F525 Кратко" + (" ✓" if current_level == 15 else ""), "callback_data": f"compression_15{suffix}"},
+                {"text": "\U0001F525 Кратко" + (" ✓" if current_level == 10 else ""), "callback_data": f"compression_10{suffix}"},
                 {"text": "\U0001F4CA Сбалансированно" + (" ✓" if current_level == 30 else ""), "callback_data": f"compression_30{suffix}"},
-                {"text": "\U0001F4D6 Подробно" + (" ✓" if current_level == 50 else ""), "callback_data": f"compression_50{suffix}"}
+                {"text": "\U0001F4D6 Подробно" + (" ✓" if current_level == 60 else ""), "callback_data": f"compression_60{suffix}"}
             ]
         ]
         return {"inline_keyboard": buttons}
@@ -889,9 +889,9 @@ class SimpleTelegramBot:
 
                 # Названия уровней
                 level_names = {
-                    15: "\U0001F525 Кратко",
+                    10: "\U0001F525 Кратко",
                     30: "\U0001F4CA Сбалансированно",
-                    50: "\U0001F4D6 Подробно"
+                    60: "\U0001F4D6 Подробно"
                 }
                 level_name = level_names.get(compression_level, f"{compression_level}%")
 
@@ -992,10 +992,9 @@ class SimpleTelegramBot:
 
             # Понятные названия уровней
             level_names = {
-                10: "\U0001F525 Ультра-кратко",
-                15: "\U0001F525 Кратко",
+                10: "\U0001F525 Кратко",
                 30: "\U0001F4CA Сбалансированно",
-                50: "\U0001F4D6 Подробно"
+                60: "\U0001F4D6 Подробно"
             }
             level_name = level_names.get(compression_level, f"{compression_level}%")
 
@@ -2211,7 +2210,12 @@ class SimpleTelegramBot:
             if "message" in update:
                 message = update["message"]
                 logger.info(f"Найдено сообщение в обновлении: {message}")
-                
+
+                # Игнорируем сообщения от самого бота (защита от зацикливания)
+                if message.get("from", {}).get("is_bot", False):
+                    logger.info("Игнорируем сообщение от бота (защита от зацикливания)")
+                    return
+
                 # Проверяем наличие текста в сообщении (обычном или пересланном)
                 text = None
                 chat_id = message["chat"]["id"]
@@ -2246,19 +2250,19 @@ class SimpleTelegramBot:
 
                         # Новые понятные команды (приоритет)
                         elif text == "/short":
-                            await self.handle_compression_command(update, 15)
+                            await self.handle_compression_command(update, 10)
                         elif text == "/balanced":
                             await self.handle_compression_command(update, 30)
                         elif text == "/detailed":
-                            await self.handle_compression_command(update, 50)
+                            await self.handle_compression_command(update, 60)
 
                         # Старые команды (для совместимости)
                         elif text in ["/10"]:
                             await self.handle_compression_command(update, 10)
                         elif text in ["/30"]:
                             await self.handle_compression_command(update, 30)
-                        elif text in ["/50"]:
-                            await self.handle_compression_command(update, 50)
+                        elif text in ["/50", "/60"]:
+                            await self.handle_compression_command(update, 60)
                         else:
                             # Проверка команд дайджестов
                             if self.digest_enabled:
