@@ -73,8 +73,15 @@ class FileProcessor:
         self.supported_extensions = base_formats
         self.max_file_size = 20 * 1024 * 1024  # 20MB - лимит Telegram
         
-    async def download_telegram_file(self, file_info: Dict[str, Any], file_name: str, file_size: int) -> Dict[str, Any]:
-        """Скачивает файл от Telegram бота"""
+    async def download_telegram_file(self, file_info: Dict[str, Any], file_name: str, file_size: int, session: aiohttp.ClientSession = None) -> Dict[str, Any]:
+        """Скачивает файл от Telegram бота
+
+        Args:
+            file_info: Информация о файле с ключом 'file_path'
+            file_name: Имя файла
+            file_size: Размер файла в байтах
+            session: Опциональная aiohttp сессия (если None - создается новая)
+        """
         try:
             # Проверяем размер файла
             if file_size > self.max_file_size:
@@ -82,7 +89,7 @@ class FileProcessor:
                     'success': False,
                     'error': 'Файл слишком большой (максимум 20MB)'
                 }
-            
+
             # Проверяем расширение файла
             file_extension = os.path.splitext(file_name.lower())[1]
             if file_extension not in self.supported_extensions:
@@ -90,13 +97,14 @@ class FileProcessor:
                     'success': False,
                     'error': f'Неподдерживаемый формат файла. Поддерживаются: {", ".join(self.supported_extensions)}'
                 }
-            
+
             # Создаем временную директорию
             temp_dir = tempfile.mkdtemp()
             local_file_path = os.path.join(temp_dir, file_name)
-            
-            # Скачиваем файл
-            async with aiohttp.ClientSession() as session:
+
+            # Используем переданную сессию или создаем новую
+            if session:
+                # Используем переданную сессию
                 async with session.get(file_info['file_path']) as response:
                     if response.status == 200:
                         async with aiofiles.open(local_file_path, 'wb') as f:
@@ -107,7 +115,20 @@ class FileProcessor:
                             'success': False,
                             'error': f'Ошибка скачивания файла: HTTP {response.status}'
                         }
-            
+            else:
+                # Создаем новую сессию если не передана
+                async with aiohttp.ClientSession() as new_session:
+                    async with new_session.get(file_info['file_path']) as response:
+                        if response.status == 200:
+                            async with aiofiles.open(local_file_path, 'wb') as f:
+                                async for chunk in response.content.iter_chunked(8192):
+                                    await f.write(chunk)
+                        else:
+                            return {
+                                'success': False,
+                                'error': f'Ошибка скачивания файла: HTTP {response.status}'
+                            }
+
             return {
                 'success': True,
                 'file_path': local_file_path,

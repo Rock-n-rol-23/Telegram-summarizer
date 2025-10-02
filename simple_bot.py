@@ -1289,7 +1289,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 
                 # Используем file_processor для скачивания и обработки
                 download_result = await self.file_processor.download_telegram_file(
-                    {"file_path": file_path}, file_name, file_size
+                    {"file_path": file_path}, file_name, file_size, self.session
                 )
                 
                 if not download_result["success"]:
