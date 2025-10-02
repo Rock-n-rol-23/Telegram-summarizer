@@ -409,20 +409,19 @@ class SimpleTelegramBot:
             data["reply_markup"] = reply_markup  # Убираем json.dumps()
         
         logger.info(f"📤 SEND_MESSAGE: Отправка сообщения в чат {chat_id}")
-        
+
         try:
-            async with self.session as session:
-                # Используем json=data когда есть reply_markup, иначе data=data
-                if reply_markup:
-                    async with session.post(url, json=data) as response:
-                        result = await response.json()
-                else:
-                    async with session.post(url, data=data) as response:
-                        result = await response.json()
-                        
-                if result.get("ok"):
-                    logger.info(f"Сообщение успешно отправлено в чат {chat_id}")
-                else:
+            # Используем json=data когда есть reply_markup, иначе data=data
+            if reply_markup:
+                async with self.session.post(url, json=data) as response:
+                    result = await response.json()
+            else:
+                async with self.session.post(url, data=data) as response:
+                    result = await response.json()
+
+            if result.get("ok"):
+                logger.info(f"Сообщение успешно отправлено в чат {chat_id}")
+            else:
                     logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {result}")
                 return result
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
@@ -1257,8 +1256,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             url = f"{self.base_url}/getFile"
             params = {"file_id": file_id}
             
-            async with self.session as session:
-                async with session.get(url, params=params) as response:
+            async with self.session.get(url, params=params) as response:
                     return await response.json()
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка получения информации о файле: {e}")
@@ -1637,8 +1635,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 "parse_mode": "Markdown"
             }
             
-            async with self.session as session:
-                async with session.post(url, json=data) as response:
+            async with self.session.post(url, json=data) as response:
                     return await response.json()
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             logger.error(f"Ошибка редактирования сообщения: {e}")
@@ -2043,8 +2040,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
         logger.info(f"🔄 GET_UPDATES: Allowed updates: {params['allowed_updates']}")
         
         try:
-            async with self.session as session:
-                async with session.get(url, params=params) as response:
+            async with self.session.get(url, params=params) as response:
                     result = await response.json()
                     
                     if result and result.get("ok"):
@@ -2068,8 +2064,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             url = f"{self.base_url}/deleteWebhook"
             params = {"drop_pending_updates": "true"}
             
-            async with self.session as session:
-                async with session.post(url, params=params) as response:
+            async with self.session.post(url, params=params) as response:
                     result = await response.json()
                     if result.get("ok"):
                         logger.info("Webhook успешно удален")
@@ -2091,8 +2086,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 "reply_markup": json.dumps({"remove_keyboard": True})
             }
             
-            async with self.session as session:
-                async with session.post(url, data=data) as response:
+            async with self.session.post(url, data=data) as response:
                     result = await response.json()
                     if result.get("ok"):
                         # Удаляем сообщение об обновлении после короткой задержки
@@ -2141,8 +2135,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
             url = f"{self.base_url}/setMyCommands"
             data = {"commands": json.dumps(commands)}
             
-            async with self.session as session:
-                async with session.post(url, data=data) as response:
+            async with self.session.post(url, data=data) as response:
                     result = await response.json()
                     if result.get("ok"):
                         logger.info("Команды бота установлены: /help, /stats, /10, /30, /50")
@@ -2157,8 +2150,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
         try:
             url = f"{self.base_url}/deleteMyCommands"
             
-            async with self.session as session:
-                async with session.post(url) as response:
+            async with self.session.post(url) as response:
                     result = await response.json()
                     if result.get("ok"):
                         logger.info("Все команды бота удалены")
@@ -2454,8 +2446,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
                 "message_id": message_id
             }
             
-            async with self.session as session:
-                async with session.post(url, json=data) as response:
+            async with self.session.post(url, json=data) as response:
                     result = await response.json()
                     return result.get("ok", False)
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
@@ -2667,8 +2658,7 @@ _Чтобы вернуться к обычной суммаризации, сн�
         }
         
         try:
-            async with self.session as session:
-                async with session.post(url, json=data) as response:
+            async with self.session.post(url, json=data) as response:
                     result = await response.json()
                     
                     # Если ошибка парсинга - пробуем без форматирования
