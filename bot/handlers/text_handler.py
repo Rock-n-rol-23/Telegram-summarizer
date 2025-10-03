@@ -147,7 +147,10 @@ class TextHandler(BaseHandler):
                 if processing_message_id:
                     await self.delete_message(chat_id, processing_message_id)
 
-                await self.send_message(chat_id, response_text)
+                # Создаем inline клавиатуру с кнопками уровней сжатия
+                keyboard = self._get_compression_keyboard(user_compression_level)
+
+                await self.send_message(chat_id, response_text, reply_markup=keyboard)
 
                 logger.info(
                     f"Успешно обработан текст пользователя {user_id}, сжатие: {compression_ratio:.1%}"
@@ -496,3 +499,32 @@ class TextHandler(BaseHandler):
         except Exception as e:
             logger.error(f"Ошибка удаления сообщения: {e}")
             return False
+
+    def _get_compression_keyboard(self, current_level: int = 30) -> dict:
+        """
+        Создает inline клавиатуру для выбора уровня сжатия
+
+        Args:
+            current_level: Текущий уровень сжатия (10, 30, 50)
+
+        Returns:
+            dict: Inline keyboard markup
+        """
+        buttons = [
+            [
+                {
+                    "text": "✅ Коротко (10%)" if current_level == 10 else "Коротко (10%)",
+                    "callback_data": "compression_10",
+                },
+                {
+                    "text": "✅ Средне (30%)" if current_level == 30 else "Средне (30%)",
+                    "callback_data": "compression_30",
+                },
+                {
+                    "text": "✅ Подробно (50%)" if current_level == 50 else "Подробно (50%)",
+                    "callback_data": "compression_50",
+                },
+            ]
+        ]
+
+        return {"inline_keyboard": buttons}
