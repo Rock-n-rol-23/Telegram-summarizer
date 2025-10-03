@@ -8,10 +8,9 @@ import os
 from pathlib import Path
 
 from bot.core.bot import RefactoredBot
+from bot.state_manager import StateManager
 from config import config
 from database import Database
-from state_manager import StateManager
-from smart_summarizer import SmartSummarizer
 from audio_processor import AudioProcessor
 from file_processor import FileProcessor
 from youtube_processor import YouTubeProcessor

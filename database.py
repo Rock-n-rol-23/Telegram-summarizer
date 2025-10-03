@@ -592,5 +592,9 @@ class DatabaseManager:
         if hasattr(self._local, 'connection'):
             self._local.connection.close()
             delattr(self._local, 'connection')
-        
+
         logger.info("Подключения к БД закрыты")
+
+
+# Алиас для обратной совместимости
+Database = DatabaseManager
