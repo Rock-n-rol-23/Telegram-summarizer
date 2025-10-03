@@ -72,13 +72,18 @@ async def main():
     # Инициализация процессоров
     logger.info("Инициализация процессоров...")
 
+    # AudioProcessor принимает только groq_client и max_file_size_mb
     audio_processor = AudioProcessor(
         groq_client=groq_client,
-        config=config
+        max_file_size_mb=50
     )
 
-    file_processor = FileProcessor(
-        config=config
+    # FileProcessor не принимает параметров
+    file_processor = FileProcessor()
+
+    # YouTubeProcessor принимает только groq_client
+    youtube_processor = YouTubeProcessor(
+        groq_client=groq_client
     )
 
     # Проверка cookies.txt для YouTube
@@ -86,10 +91,6 @@ async def main():
     if not cookies_path.exists():
         logger.warning("⚠️  cookies.txt не найден - YouTube обработка может не работать")
         logger.warning("⚠️  См. README.md для инструкций по настройке cookies")
-
-    youtube_processor = YouTubeProcessor(
-        cookies_path=str(cookies_path) if cookies_path.exists() else None
-    )
 
     url_processor = URLProcessor()
 
