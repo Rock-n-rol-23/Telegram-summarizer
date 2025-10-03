@@ -23,9 +23,9 @@ class Config:
         self.OPENROUTER_PRIMARY_MODEL = os.getenv('OPENROUTER_PRIMARY_MODEL', 'deepseek/deepseek-chat-v3.1:free')
         self.OPENROUTER_SECONDARY_MODEL = os.getenv('OPENROUTER_SECONDARY_MODEL', 'qwen/qwen-2.5-72b-instruct:free')
         
-        # Optional paid fallbacks (disabled by default)
+        # Groq configuration (fast, enabled by default)
         self.GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
-        self.ENABLE_GROQ_FALLBACK = os.getenv('ENABLE_GROQ_FALLBACK', 'false').lower() == 'true'
+        self.ENABLE_GROQ_FALLBACK = os.getenv('ENABLE_GROQ_FALLBACK', 'true').lower() == 'true'
         self.GROQ_LLM_MODEL = os.getenv('GROQ_LLM_MODEL', 'llama-3.3-70b-versatile')
         
         # База данных - приоритет Railway PostgreSQL
