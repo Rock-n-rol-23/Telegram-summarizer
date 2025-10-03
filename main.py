@@ -34,7 +34,7 @@ async def main():
     # Инициализация базы данных
     logger.info("Инициализация базы данных...")
     db = Database(config.DATABASE_URL)
-    db.init_db()
+    db.init_database()
 
     # Инициализация state manager
     logger.info("Инициализация state manager...")
