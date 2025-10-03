@@ -47,6 +47,29 @@ class UpdateRouter:
         if any(key in message for key in ["voice", "audio", "video_note"]):
             return ("audio", None)
 
+        # Фото, видео, стикеры и другие медиа - игнорируем или обрабатываем caption
+        if any(key in message for key in ["photo", "video", "sticker", "animation", "video_note"]):
+            # Если есть caption, обрабатываем как текст
+            if "caption" in message and message["caption"].strip():
+                text = message["caption"]
+
+                # Проверяем наличие YouTube ссылок
+                youtube_urls = self._extract_youtube_urls(text)
+                if youtube_urls:
+                    return ("youtube", {"urls": youtube_urls})
+
+                # Проверяем наличие обычных URL
+                urls = self._extract_urls(text)
+                if urls:
+                    return ("url", {"urls": urls})
+
+                # Обычный текст из caption
+                return ("text", None)
+            else:
+                # Медиа без текста - игнорируем
+                logger.info(f"Получено медиа без caption, игнорируем: {list(message.keys())}")
+                return ("unknown", None)
+
         # Текстовые сообщения с URL
         if "text" in message:
             text = message["text"]
