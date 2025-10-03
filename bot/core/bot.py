@@ -164,6 +164,7 @@ class RefactoredBot:
             openrouter_client=self.openrouter_client,
             user_requests=self.user_requests,
             processing_users=self.processing_users,
+            db_executor=self.executor,
         )
 
         # CallbackHandler
