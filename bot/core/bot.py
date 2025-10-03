@@ -223,7 +223,7 @@ class RefactoredBot:
             elif handler_type == "audio":
                 await self.audio_handler.handle_audio_message(update)
             elif handler_type == "callback":
-                await self.callback_handler.handle_callback_query(update)
+                await self.callback_handler.handle_callback_query(update["callback_query"])
             elif handler_type == "youtube":
                 await self.text_handler.handle_text_message(update)  # YouTube обрабатывается в TextHandler
             elif handler_type == "url":
