@@ -167,12 +167,13 @@ class RefactoredBot:
             db_executor=self.executor,
         )
 
-        # CallbackHandler
+        # CallbackHandler (передаем text_handler для пересоздания саммари)
         self.callback_handler = CallbackHandler(
             session=self.session,
             base_url=self.base_url,
             db=self.db,
             state_manager=self.state_manager,
+            text_handler=self.text_handler,
         )
 
         logger.info("✅ Все handlers инициализированы")

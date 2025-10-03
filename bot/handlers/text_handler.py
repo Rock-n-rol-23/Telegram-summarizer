@@ -40,6 +40,11 @@ class TextHandler(BaseHandler):
         self.user_messages_buffer = user_messages_buffer
         self.db_executor = db_executor
 
+        # Кэш последних текстов пользователей для пересоздания саммари
+        self.user_last_texts: Dict[int, str] = {}
+        # Кэш message_id последних саммари
+        self.user_summary_messages: Dict[int, int] = {}
+
     async def handle_text_message(self, update: dict, message_text: Optional[str] = None):
         """Обработка текстовых сообщений"""
         from bot.text_utils import extract_text_from_message
@@ -150,7 +155,13 @@ class TextHandler(BaseHandler):
                 # Создаем inline клавиатуру с кнопками уровней сжатия
                 keyboard = self._get_compression_keyboard(user_compression_level)
 
-                await self.send_message(chat_id, response_text, reply_markup=keyboard)
+                # Отправляем саммари и сохраняем message_id
+                result = await self.send_message(chat_id, response_text, reply_markup=keyboard)
+                if result and "result" in result:
+                    summary_message_id = result["result"]["message_id"]
+                    # Сохраняем текст и message_id для пересоздания при нажатии кнопок
+                    self.user_last_texts[user_id] = text
+                    self.user_summary_messages[user_id] = summary_message_id
 
                 logger.info(
                     f"Успешно обработан текст пользователя {user_id}, сжатие: {compression_ratio:.1%}"
@@ -528,6 +539,72 @@ class TextHandler(BaseHandler):
             logger.error(f"Ошибка удаления сообщения: {e}")
             return False
 
+    async def recreate_summary(self, user_id: int, chat_id: int, message_id: int, compression_level: int):
+        """
+        Пересоздает саммари с новым уровнем сжатия
+
+        Args:
+            user_id: ID пользователя
+            chat_id: ID чата
+            message_id: ID сообщения для редактирования
+            compression_level: Новый уровень сжатия (10, 30, 50)
+        """
+        try:
+            # Проверяем наличие сохраненного текста
+            if user_id not in self.user_last_texts:
+                logger.warning(f"Нет сохраненного текста для пользователя {user_id}")
+                await self.edit_message_text(
+                    chat_id,
+                    message_id,
+                    "❌ Не могу пересоздать саммари - исходный текст не сохранен.\n\nОтправьте текст заново."
+                )
+                return
+
+            text = self.user_last_texts[user_id]
+            target_ratio = compression_level / 100.0
+
+            # Пересоздаем саммари
+            import time
+            start_time = time.time()
+            summary = await self.summarize_text(text, target_ratio=target_ratio)
+            processing_time = time.time() - start_time
+
+            if summary and not summary.startswith("❌"):
+                compression_ratio = len(summary) / len(text)
+
+                # Формируем новый ответ
+                response_text = f"""📋 Саммари готово! (Уровень сжатия: {compression_level}%)
+
+{summary}
+
+📊 Статистика:
+• Исходный текст: {len(text):,} символов
+• Саммари: {len(summary):,} символов
+• Сжатие: {compression_ratio:.1%}
+• Время обработки: {processing_time:.1f}с"""
+
+                # Создаем обновленную клавиатуру с новым выбранным уровнем
+                keyboard = self._get_compression_keyboard(compression_level)
+
+                # Редактируем сообщение
+                await self.edit_message_text(chat_id, message_id, response_text, reply_markup=keyboard)
+
+                logger.info(f"Пересоздано саммари для пользователя {user_id} с уровнем {compression_level}%")
+            else:
+                await self.edit_message_text(
+                    chat_id,
+                    message_id,
+                    "❌ Ошибка при пересоздании саммари!\n\nПопробуйте отправить текст заново."
+                )
+
+        except Exception as e:
+            logger.error(f"Ошибка пересоздания саммари для пользователя {user_id}: {e}")
+            await self.edit_message_text(
+                chat_id,
+                message_id,
+                f"❌ Произошла ошибка!\n\n{str(e)[:100]}"
+            )
+
     def _get_compression_keyboard(self, current_level: int = 30) -> dict:
         """
         Создает inline клавиатуру для выбора уровня сжатия
@@ -541,15 +618,15 @@ class TextHandler(BaseHandler):
         buttons = [
             [
                 {
-                    "text": "✅ Коротко (10%)" if current_level == 10 else "Коротко (10%)",
+                    "text": "✅ Кратко" if current_level == 10 else "Кратко",
                     "callback_data": "compression_10",
                 },
                 {
-                    "text": "✅ Средне (30%)" if current_level == 30 else "Средне (30%)",
+                    "text": "✅ Средне" if current_level == 30 else "Средне",
                     "callback_data": "compression_30",
                 },
                 {
-                    "text": "✅ Подробно (50%)" if current_level == 50 else "Подробно (50%)",
+                    "text": "✅ Подробно" if current_level == 50 else "Подробно",
                     "callback_data": "compression_50",
                 },
             ]

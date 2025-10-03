@@ -9,8 +9,9 @@ logger = logging.getLogger(__name__)
 class CallbackHandler(BaseHandler):
     """Обработчик callback queries от inline кнопок"""
 
-    def __init__(self, session, base_url, db, state_manager):
+    def __init__(self, session, base_url, db, state_manager, text_handler=None):
         super().__init__(session, base_url, db, state_manager)
+        self.text_handler = text_handler
 
     async def handle_callback_query(self, callback_query: dict):
         """Обработка callback query"""
@@ -55,7 +56,7 @@ class CallbackHandler(BaseHandler):
     async def handle_compression_callback(
         self, query_id: str, chat_id: int, message_id: int, user_id: int, callback_data: str
     ):
-        """Обработка изменения уровня сжатия"""
+        """Обработка изменения уровня сжатия с пересозданием саммари"""
         try:
             # Извлекаем уровень из callback_data (например: "compression_30")
             parts = callback_data.split("_")
@@ -70,29 +71,23 @@ class CallbackHandler(BaseHandler):
                 await self.answer_callback_query(query_id, "❌ Ошибка сохранения настроек")
                 return
 
-            # Названия уровней
-            level_names = {
-                10: "🔥 Кратко",
-                30: "📊 Сбалансированно",
-                60: "📖 Подробно"
-            }
-            level_name = level_names.get(compression_level, f"{compression_level}%")
-
-            # Отправляем подтверждение
+            # Показываем индикатор обработки
             await self.answer_callback_query(
                 query_id,
-                f"✅ Установлен уровень: {level_name}",
+                f"🔄 Пересоздаю саммари...",
                 show_alert=False
             )
 
-            # Обновляем сообщение с новыми кнопками
-            confirmation_text = (
-                f"✅ Стиль саммаризации изменён: {level_name}\n\n"
-                f"Теперь твои тексты будут обрабатываться в стиле \"{level_name}\".\n\n"
-                f"📝 Просто отправь текст, статью или документ!"
-            )
-
-            await self.edit_message_text(chat_id, message_id, confirmation_text)
+            # Пересоздаем саммари через TextHandler
+            if self.text_handler:
+                await self.text_handler.recreate_summary(user_id, chat_id, message_id, compression_level)
+            else:
+                logger.error("TextHandler не инициализирован в CallbackHandler!")
+                await self.edit_message_text(
+                    chat_id,
+                    message_id,
+                    "❌ Ошибка: TextHandler недоступен.\n\nОтправьте текст заново."
+                )
 
         except (ValueError, IndexError) as e:
             logger.error(f"Ошибка парсинга callback_data: {e}")
