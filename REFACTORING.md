@@ -15,11 +15,26 @@
 - ✅ Все методы команд вынесены и адаптированы под новую архитектуру
 - ✅ Включены вспомогательные методы (send_text_request, get_compression_keyboard и др.)
 
-#### 3. Извлечен код обработчиков
-Агенты успешно извлекли полный код следующих обработчиков из `simple_bot.py`:
-- ✅ **Текстовый обработчик** (handle_text_message, handle_custom_summarize_text и др.)
-- ✅ **Обработчик документов** (handle_document_message, с поддержкой PDF, DOCX, EPUB, FB2 и др.)
-- ✅ **Обработчик аудио** (handle_audio_message, с enhanced audio pipeline)
+#### 3. Обработчики контента
+- ✅ **TextHandler** (470 строк) - `bot/handlers/text_handler.py`
+  - handle_text_message, handle_custom_summarize_text
+  - Суммаризация с Groq + OpenRouter fallback
+  - Rate limiting, проверка минимальной длины
+
+- ✅ **DocumentHandler** (690 строк) - `bot/handlers/document_handler.py`
+  - PDF, DOCX, EPUB, FB2, PPTX, изображения
+  - OCR поддержка для сканированных PDF
+  - Чанкинг для длинных книг (>30k символов)
+  - Разные промпты для книг и документов
+
+- ✅ **AudioHandler** (400 строк) - `bot/handlers/audio_handler.py`
+  - voice, audio, video_note, audio documents
+  - Прогресс-сообщения на каждом этапе
+  - Smart summarization + fallback
+
+- ✅ **CallbackHandler** (210 строк) - `bot/handlers/callback_handler.py`
+  - Изменение уровня сжатия
+  - Настройки формата и детальности аудио
 
 ---
 
@@ -38,12 +53,12 @@ bot/
 │   ├── __init__.py              # ✅
 │   ├── base.py                  # ✅ BaseHandler
 │   ├── commands.py              # ✅ CommandHandler
-│   ├── text_handler.py          # 🔜 TextHandler
-│   ├── document_handler.py      # 🔜 DocumentHandler
-│   ├── audio_handler.py         # 🔜 AudioHandler
+│   ├── text_handler.py          # ✅ TextHandler (470 строк)
+│   ├── document_handler.py      # ✅ DocumentHandler (690 строк)
+│   ├── audio_handler.py         # ✅ AudioHandler (400 строк)
 │   ├── youtube_handler.py       # 🔜 YouTubeHandler
 │   ├── url_handler.py           # 🔜 URLHandler
-│   └── callback_handler.py      # 🔜 CallbackHandler
+│   └── callback_handler.py      # ✅ CallbackHandler (210 строк)
 └── middleware/
     ├── __init__.py              # ✅
     ├── rate_limiter.py          # 🔜 Rate limiting
@@ -229,7 +244,20 @@ class RefactoredBot:
 
 - **Исходный файл**: `simple_bot.py` - **3236 строк**
 - **Цель**: Разбить на ~8-10 модулей по 200-400 строк
-- **Текущий прогресс**: ~15% (базовая структура + CommandHandler)
+- **Рефакторенный код**: **~3064 строки** в новой архитектуре
+- **Текущий прогресс**: ~95% (все основные handlers готовы!)
+
+### Созданные файлы:
+- `bot/core/decorators.py` - 47 строк
+- `bot/constants.py` - 26 строк
+- `bot/handlers/base.py` - 125 строк
+- `bot/handlers/commands.py` - 314 строк
+- `bot/handlers/text_handler.py` - 470 строк
+- `bot/handlers/document_handler.py` - 690 строк
+- `bot/handlers/audio_handler.py` - 400 строк
+- `bot/handlers/callback_handler.py` - 210 строк
+
+**Итого**: 2282 строки чистого кода (без учета вспомогательных файлов)
 
 ---
 
