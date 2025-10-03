@@ -66,6 +66,13 @@ class RefactoredBot:
         # Router для маршрутизации обновлений
         self.router = UpdateRouter()
 
+        # Shared state dictionaries для handlers
+        self.user_settings: Dict = {}
+        self.user_states: Dict = {}
+        self.user_messages_buffer: Dict = {}
+        self.user_requests: Dict = {}
+        self.processing_users: set = set()
+
         # Handlers будут инициализированы после создания session
         self.command_handler: Optional[CommandHandler] = None
         self.text_handler: Optional[TextHandler] = None
@@ -109,6 +116,9 @@ class RefactoredBot:
             base_url=self.base_url,
             db=self.db,
             state_manager=self.state_manager,
+            user_settings=self.user_settings,
+            user_states=self.user_states,
+            user_messages_buffer=self.user_messages_buffer,
         )
 
         # TextHandler
@@ -119,10 +129,13 @@ class RefactoredBot:
             state_manager=self.state_manager,
             groq_client=self.groq_client,
             openrouter_client=self.openrouter_client,
-            youtube_processor=self.youtube_processor,
-            url_processor=self.url_processor,
-            executor=self.executor,
-            config=self.config,
+            smart_summarizer=None,  # TODO: создать если нужен
+            user_requests=self.user_requests,
+            processing_users=self.processing_users,
+            user_states=self.user_states,
+            user_settings=self.user_settings,
+            user_messages_buffer=self.user_messages_buffer,
+            db_executor=self.executor,
         )
 
         # DocumentHandler
@@ -131,11 +144,11 @@ class RefactoredBot:
             base_url=self.base_url,
             db=self.db,
             state_manager=self.state_manager,
-            groq_client=self.groq_client,
-            openrouter_client=self.openrouter_client,
             file_processor=self.file_processor,
-            executor=self.executor,
-            config=self.config,
+            groq_client=self.groq_client,
+            user_requests=self.user_requests,
+            processing_users=self.processing_users,
+            db_executor=self.executor,
         )
 
         # AudioHandler
@@ -144,11 +157,13 @@ class RefactoredBot:
             base_url=self.base_url,
             db=self.db,
             state_manager=self.state_manager,
+            token=self.token,
+            audio_processor=self.audio_processor,
+            smart_summarizer=None,  # TODO: создать если нужен
             groq_client=self.groq_client,
             openrouter_client=self.openrouter_client,
-            audio_processor=self.audio_processor,
-            executor=self.executor,
-            config=self.config,
+            user_requests=self.user_requests,
+            processing_users=self.processing_users,
         )
 
         # CallbackHandler
