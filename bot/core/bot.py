@@ -11,6 +11,7 @@ from bot.handlers.commands import CommandHandler
 from bot.handlers.text_handler import TextHandler
 from bot.handlers.document_handler import DocumentHandler
 from bot.handlers.audio_handler import AudioHandler
+from bot.handlers.photo_handler import PhotoHandler
 from bot.handlers.callback_handler import CallbackHandler
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,7 @@ class RefactoredBot:
         self.text_handler: Optional[TextHandler] = None
         self.document_handler: Optional[DocumentHandler] = None
         self.audio_handler: Optional[AudioHandler] = None
+        self.photo_handler: Optional[PhotoHandler] = None
         self.callback_handler: Optional[CallbackHandler] = None
 
         # Offset для long polling
@@ -167,6 +169,17 @@ class RefactoredBot:
             db_executor=self.executor,
         )
 
+        # PhotoHandler (Gemini Vision)
+        self.photo_handler = PhotoHandler(
+            session=self.session,
+            base_url=self.base_url,
+            db=self.db,
+            state_manager=self.state_manager,
+            user_requests=self.user_requests,
+            processing_users=self.processing_users,
+            db_executor=self.executor,
+        )
+
         # CallbackHandler (передаем text_handler для пересоздания саммари)
         self.callback_handler = CallbackHandler(
             session=self.session,
@@ -176,7 +189,7 @@ class RefactoredBot:
             text_handler=self.text_handler,
         )
 
-        logger.info("✅ Все handlers инициализированы")
+        logger.info("✅ Все handlers инициализированы (включая PhotoHandler для Gemini Vision)")
 
     async def run_polling(self):
         """Основной цикл long polling"""
@@ -223,6 +236,8 @@ class RefactoredBot:
                 await self.document_handler.handle_document_message(update)
             elif handler_type == "audio":
                 await self.audio_handler.handle_audio_message(update)
+            elif handler_type == "photo":
+                await self.photo_handler.handle_photo_message(update)
             elif handler_type == "callback":
                 await self.callback_handler.handle_callback_query(update["callback_query"])
             elif handler_type == "youtube":

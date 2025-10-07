@@ -47,8 +47,13 @@ class UpdateRouter:
         if any(key in message for key in ["voice", "audio", "video_note"]):
             return ("audio", None)
 
-        # Фото, видео, стикеры и другие медиа - игнорируем или обрабатываем caption
-        if any(key in message for key in ["photo", "video", "sticker", "animation", "video_note"]):
+        # Фото - обрабатываем через Gemini Vision
+        if "photo" in message:
+            logger.info("Получено фото, маршрутизация в PhotoHandler")
+            return ("photo", None)
+
+        # Видео, стикеры и другие медиа - обрабатываем caption или игнорируем
+        if any(key in message for key in ["video", "sticker", "animation", "video_note"]):
             # Если есть caption, обрабатываем как текст
             if "caption" in message and message["caption"].strip():
                 text = message["caption"]
