@@ -6,6 +6,7 @@ import sqlite3
 from typing import Dict, Set, Optional
 from .base import BaseHandler
 from bot.core.decorators import retry_on_failure
+from llm.provider_router import groq_compatible_client
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,8 @@ class DocumentHandler(BaseHandler):
     ):
         super().__init__(session, base_url, db, state_manager)
         self.file_processor = file_processor
-        self.groq_client = groq_client
+        # Используем Groq-совместимый wrapper с LLM Router (Gemini → OpenRouter → Groq)
+        self.groq_client = groq_compatible_client
         self.user_requests = user_requests
         self.processing_users = processing_users
         self.db_executor = db_executor

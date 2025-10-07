@@ -6,6 +6,7 @@ import sqlite3
 from typing import Dict, Set, Optional
 from datetime import datetime
 from .base import BaseHandler
+from llm.provider_router import generate_completion
 
 logger = logging.getLogger(__name__)
 
@@ -386,41 +387,20 @@ class TextHandler(BaseHandler):
 Текст для суммаризации:
 {text}"""
 
-            # Пробуем Groq, затем OpenRouter
+            # Используем LLM Provider Router (Gemini → OpenRouter → Groq)
             summary = None
-            if self.groq_client:
-                try:
-                    from bot.core.decorators import retry_on_failure
-
-                    @retry_on_failure(max_retries=3, delay=1.0, backoff=2.0)
-                    def call_groq():
-                        return self.groq_client.chat.completions.create(
-                            messages=[{"role": "user", "content": prompt}],
-                            model="llama-3.3-70b-versatile",
-                            temperature=0.3,
-                            max_tokens=2000,
-                        )
-
-                    response = call_groq()
-                    if response.choices and response.choices[0].message:
-                        summary = response.choices[0].message.content.strip()
-                except Exception as e:
-                    logger.warning(f"Groq API недоступен: {e}")
-
-            # Fallback на OpenRouter
-            if not summary and self.openrouter_client:
-                try:
-                    response = await self.openrouter_client.chat.completions.create(
-                        messages=[{"role": "user", "content": prompt}],
-                        model="deepseek/deepseek-chat-v3.1:free",
-                        temperature=0.3,
-                        max_tokens=2000,
-                    )
-                    if response.choices and response.choices[0].message:
-                        summary = response.choices[0].message.content.strip()
-                        logger.info("Использован OpenRouter (fallback)")
-                except Exception as e:
-                    logger.error(f"OpenRouter API ошибка: {e}")
+            try:
+                logger.info("🤖 Генерация суммаризации через LLM Provider Router")
+                summary = generate_completion(
+                    prompt=prompt,
+                    system=None,
+                    temperature=0.3,
+                    max_tokens=2000
+                )
+                if summary:
+                    summary = summary.strip()
+            except Exception as e:
+                logger.error(f"❌ Ошибка LLM Provider Router: {e}")
 
             return summary if summary else "❌ Не удалось получить ответ от модели"
 
@@ -465,26 +445,19 @@ class TextHandler(BaseHandler):
 Текст для суммаризации:
 {text}"""
 
-            if self.groq_client:
-                from bot.core.decorators import retry_on_failure
-
-                @retry_on_failure(max_retries=3, delay=1.0, backoff=2.0)
-                def call_groq_api():
-                    return self.groq_client.chat.completions.create(
-                        messages=[{"role": "user", "content": prompt}],
-                        model="llama-3.3-70b-versatile",
-                        temperature=0.3,
-                        max_tokens=2000,
-                        top_p=0.9,
-                        stream=False,
-                    )
-
-                response = call_groq_api()
-
-                if response.choices and response.choices[0].message:
-                    summary = response.choices[0].message.content
-                    if summary:
-                        return summary.strip()
+            # Используем LLM Provider Router (Gemini → OpenRouter → Groq)
+            try:
+                logger.info("🤖 Кастомная суммаризация через LLM Provider Router")
+                summary = generate_completion(
+                    prompt=prompt,
+                    system=None,
+                    temperature=0.3,
+                    max_tokens=2000
+                )
+                if summary:
+                    return summary.strip()
+            except Exception as e:
+                logger.error(f"❌ Ошибка LLM Provider Router: {e}")
 
             return "❌ Не удалось получить ответ от модели"
 

@@ -306,3 +306,66 @@ def analyze_image(image_data: bytes,
                  max_tokens: int = 2000) -> str:
     """Convenience function for analyzing images"""
     return llm_router.analyze_image(image_data, prompt, temperature, max_tokens)
+
+
+# Wrapper для обратной совместимости с Groq API
+class ChatCompletions:
+    """Wrapper для совместимости с Groq Chat API"""
+
+    @staticmethod
+    def create(messages, model=None, temperature=0.3, max_tokens=2000, **kwargs):
+        """
+        Create chat completion (совместимо с Groq API)
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            model: Model name (игнорируется, используется router)
+            temperature: Temperature for generation
+            max_tokens: Max tokens to generate
+
+        Returns:
+            Mock response object compatible with Groq API
+        """
+        # Извлекаем промпт из messages
+        system_msg = None
+        user_msg = None
+
+        for msg in messages:
+            if msg['role'] == 'system':
+                system_msg = msg['content']
+            elif msg['role'] == 'user':
+                user_msg = msg['content']
+
+        # Генерируем ответ через router
+        response_text = llm_router.generate_completion(
+            prompt=user_msg,
+            system=system_msg,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
+        # Создаем mock response object
+        class MockMessage:
+            def __init__(self, content):
+                self.content = content
+
+        class MockChoice:
+            def __init__(self, message):
+                self.message = message
+
+        class MockResponse:
+            def __init__(self, content):
+                self.choices = [MockChoice(MockMessage(content))]
+
+        return MockResponse(response_text)
+
+
+class GroqCompatibleClient:
+    """Client compatible with Groq API but using LLM Router"""
+
+    def __init__(self):
+        self.chat = type('Chat', (), {'completions': ChatCompletions()})()
+
+
+# Создаем совместимый экземпляр
+groq_compatible_client = GroqCompatibleClient()
