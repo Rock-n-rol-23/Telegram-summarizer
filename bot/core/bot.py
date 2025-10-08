@@ -13,6 +13,7 @@ from bot.handlers.document_handler import DocumentHandler
 from bot.handlers.audio_handler import AudioHandler
 from bot.handlers.photo_handler import PhotoHandler
 from bot.handlers.callback_handler import CallbackHandler
+from bot.handlers.choice_handler import ChoiceHandler
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ class RefactoredBot:
         self.audio_handler: Optional[AudioHandler] = None
         self.photo_handler: Optional[PhotoHandler] = None
         self.callback_handler: Optional[CallbackHandler] = None
+        self.choice_handler: Optional[ChoiceHandler] = None
 
         # Offset для long polling
         self.update_offset = 0
@@ -138,6 +140,7 @@ class RefactoredBot:
             user_settings=self.user_settings,
             user_messages_buffer=self.user_messages_buffer,
             db_executor=self.executor,
+            url_processor=self.url_processor,
         )
 
         # DocumentHandler
@@ -189,7 +192,18 @@ class RefactoredBot:
             text_handler=self.text_handler,
         )
 
-        logger.info("✅ Все handlers инициализированы (включая PhotoHandler для Gemini Vision)")
+        # ChoiceHandler (для диалога выбора между фото и ссылкой)
+        self.choice_handler = ChoiceHandler(
+            session=self.session,
+            base_url=self.base_url,
+            db=self.db,
+            state_manager=self.state_manager,
+            photo_handler=self.photo_handler,
+            text_handler=self.text_handler,
+            url_processor=self.url_processor,
+        )
+
+        logger.info("✅ Все handlers инициализированы (включая PhotoHandler для Gemini Vision и ChoiceHandler)")
 
     async def run_polling(self):
         """Основной цикл long polling"""
@@ -238,8 +252,17 @@ class RefactoredBot:
                 await self.audio_handler.handle_audio_message(update)
             elif handler_type == "photo":
                 await self.photo_handler.handle_photo_message(update)
+            elif handler_type == "photo_with_url":
+                # Фото с URL - даем пользователю выбрать что обрабатывать
+                urls = extra_data.get("urls", [])
+                await self.choice_handler.handle_photo_with_url(update, urls)
             elif handler_type == "callback":
-                await self.callback_handler.handle_callback_query(update["callback_query"])
+                # Проверяем, это callback от choice_handler или от других handlers
+                callback_data = update["callback_query"]["data"]
+                if callback_data.startswith("choice_"):
+                    await self.choice_handler.handle_choice_callback(update["callback_query"])
+                else:
+                    await self.callback_handler.handle_callback_query(update["callback_query"])
             elif handler_type == "youtube":
                 await self.text_handler.handle_text_message(update)  # YouTube обрабатывается в TextHandler
             elif handler_type == "url":
