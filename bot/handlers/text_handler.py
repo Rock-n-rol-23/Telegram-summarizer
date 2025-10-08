@@ -28,7 +28,8 @@ class TextHandler(BaseHandler):
         user_states: Dict,
         user_settings: Dict,
         user_messages_buffer: Dict,
-        db_executor
+        db_executor,
+        url_processor=None
     ):
         super().__init__(session, base_url, db, state_manager)
         self.groq_client = groq_client
@@ -40,6 +41,7 @@ class TextHandler(BaseHandler):
         self.user_settings = user_settings
         self.user_messages_buffer = user_messages_buffer
         self.db_executor = db_executor
+        self.url_processor = url_processor
 
         # Кэш последних текстов пользователей для пересоздания саммари
         self.user_last_texts: Dict[int, str] = {}
@@ -49,6 +51,7 @@ class TextHandler(BaseHandler):
     async def handle_text_message(self, update: dict, message_text: Optional[str] = None):
         """Обработка текстовых сообщений"""
         from bot.text_utils import extract_text_from_message
+        import re
 
         chat_id = update["message"]["chat"]["id"]
         user = update["message"]["from"]
@@ -65,6 +68,21 @@ class TextHandler(BaseHandler):
                 return
 
         logger.info(f"Получен текст от пользователя {user_id} ({username}), длина: {len(text)} символов")
+
+        # Проверяем наличие URL в тексте (если это не переданный текст из ChoiceHandler)
+        if not message_text and self.url_processor:
+            # Ищем URL в тексте
+            url_pattern = r'https?://[^\s]+'
+            urls = re.findall(url_pattern, text)
+
+            # Фильтруем YouTube URL (они обрабатываются отдельно)
+            urls = [url for url in urls if 'youtube.com' not in url and 'youtu.be' not in url]
+
+            if urls:
+                logger.info(f"Найдены URL в тексте: {urls}")
+                # Обрабатываем URL вместо текста
+                await self._handle_url_message(update, urls)
+                return
 
         # Проверка лимита запросов
         if not self.check_user_rate_limit(user_id):
@@ -606,3 +624,188 @@ class TextHandler(BaseHandler):
         ]
 
         return {"inline_keyboard": buttons}
+
+    async def _handle_url_message(self, update: dict, urls: list):
+        """
+        Обработка сообщения с URL
+
+        Args:
+            update: Telegram update object
+            urls: Список URL для обработки
+        """
+        message = update["message"]
+        chat_id = message["chat"]["id"]
+        user_id = message["from"]["id"]
+        username = message["from"].get("username", "")
+
+        logger.info(f"Обработка {len(urls)} URL от пользователя {user_id}")
+
+        # Проверка лимита запросов
+        if not self.check_user_rate_limit(user_id):
+            await self.send_message(
+                chat_id,
+                "⏰ Превышен лимит запросов!\n\n"
+                "Пожалуйста, подождите минуту перед отправкой нового запроса. Лимит: 10 запросов в минуту."
+            )
+            return
+
+        # Проверка на повторную обработку
+        if user_id in self.processing_users:
+            await self.send_message(
+                chat_id,
+                "⚠️ Обработка в процессе!\n\n"
+                "Пожалуйста, дождитесь завершения предыдущего запроса."
+            )
+            return
+
+        # Добавляем пользователя в список обрабатываемых
+        self.processing_users.add(user_id)
+
+        try:
+            # Отправляем сообщение о начале обработки
+            processing_msg = await self.send_message(
+                chat_id,
+                f"🔗 Обрабатываю {len(urls)} ссылку(и)...\n\n⏳ Загружаю и парсю контент..."
+            )
+            processing_msg_id = processing_msg.get("result", {}).get("message_id") if processing_msg else None
+
+            # Обрабатываем каждый URL
+            all_text = []
+            titles = []
+
+            for i, url in enumerate(urls):
+                # Обновляем прогресс
+                if processing_msg_id and len(urls) > 1:
+                    await self.edit_message_text(
+                        chat_id,
+                        processing_msg_id,
+                        f"🔗 Обрабатываю ссылку {i+1}/{len(urls)}...\n\n⏳ Загружаю контент из {url[:50]}..."
+                    )
+
+                # Парсим URL
+                text, title = await self.url_processor.process_url(url)
+
+                if text:
+                    all_text.append(text)
+                    if title:
+                        titles.append(f"**{title}**\n")
+                    logger.info(f"Успешно обработан URL {url}: {len(text)} символов")
+                else:
+                    logger.warning(f"Не удалось извлечь текст из URL {url}")
+
+            # Удаляем сообщение о обработке
+            if processing_msg_id:
+                await self.delete_message(chat_id, processing_msg_id)
+
+            # Проверяем результат
+            if not all_text:
+                await self.send_message(
+                    chat_id,
+                    "❌ Не удалось извлечь текст из указанных ссылок!\n\n"
+                    "Убедитесь, что ссылки ведут на доступные веб-страницы."
+                )
+                return
+
+            # Объединяем весь текст
+            combined_text = "\n\n---\n\n".join(all_text)
+
+            # Получаем уровень сжатия пользователя
+            user_compression_level = await self.get_user_compression_level(user_id)
+            target_ratio = user_compression_level / 100.0
+
+            # Отправляем новое сообщение о суммаризации
+            processing_msg2 = await self.send_message(
+                chat_id,
+                "🤖 Создаю саммари из контента...\n\nЭто может занять несколько секунд."
+            )
+            processing_msg_id2 = processing_msg2.get("result", {}).get("message_id") if processing_msg2 else None
+
+            import time
+            start_time = time.time()
+
+            # Выполняем суммаризацию
+            summary = await self.summarize_text(combined_text, target_ratio=target_ratio)
+            processing_time = time.time() - start_time
+
+            # Удаляем сообщение о суммаризации
+            if processing_msg_id2:
+                await self.delete_message(chat_id, processing_msg_id2)
+
+            if summary and not summary.startswith("❌"):
+                # Сохраняем запрос в базу данных
+                try:
+                    await self._run_in_executor(
+                        self.db.save_user_request,
+                        user_id,
+                        username,
+                        len(combined_text),
+                        len(summary),
+                        processing_time,
+                        "url_summarization",
+                    )
+                except (OSError, sqlite3.Error) as save_error:
+                    logger.error(f"Ошибка сохранения запроса в БД: {save_error}")
+
+                # Вычисляем статистику
+                compression_ratio = len(summary) / len(combined_text)
+
+                # Формируем заголовок
+                title_text = ""
+                if titles:
+                    title_text = "\n".join(titles[:3])  # Максимум 3 заголовка
+                    if len(titles) > 3:
+                        title_text += f"\n_...и еще {len(titles) - 3} источников_"
+                    title_text += "\n"
+
+                # Формируем ответ
+                url_list = "\n".join(f"• {url}" for url in urls[:3])
+                if len(urls) > 3:
+                    url_list += f"\n• ...и еще {len(urls) - 3} ссылок"
+
+                response_text = f"""🔗 **Саммари из веб-контента**
+
+{title_text}
+{summary}
+
+📊 **Статистика:**
+• Обработано ссылок: {len(urls)}
+• Извлечено текста: {len(combined_text):,} символов
+• Саммари: {len(summary):,} символов
+• Сжатие: {compression_ratio:.1%}
+• Время: {processing_time:.1f}с
+
+🔗 **Источники:**
+{url_list}"""
+
+                # Создаем inline клавиатуру с кнопками уровней сжатия
+                keyboard = self._get_compression_keyboard(user_compression_level)
+
+                # Отправляем саммари
+                result = await self.send_message(chat_id, response_text, reply_markup=keyboard)
+                if result and "result" in result:
+                    summary_message_id = result["result"]["message_id"]
+                    # Сохраняем текст и message_id для пересоздания при нажатии кнопок
+                    self.user_last_texts[user_id] = combined_text
+                    self.user_summary_messages[user_id] = summary_message_id
+
+                logger.info(
+                    f"Успешно обработаны URL пользователя {user_id}, сжатие: {compression_ratio:.1%}"
+                )
+
+            else:
+                await self.send_message(
+                    chat_id,
+                    "❌ Ошибка при создании саммари!\n\n"
+                    "Попробуйте позже или обратитесь к администратору.",
+                )
+                logger.error(f"Не удалось создать саммари для URL пользователя {user_id}")
+
+        except Exception as e:
+            logger.error(f"Ошибка при обработке URL пользователя {user_id}: {str(e)}")
+            await self.send_message(
+                chat_id, f"❌ Произошла ошибка!\n\nПожалуйста, попробуйте позже."
+            )
+
+        finally:
+            # Удаляем пользователя из списка обрабатываемых
+            self.processing_users.discard(user_id)
