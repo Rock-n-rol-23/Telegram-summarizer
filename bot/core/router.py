@@ -47,8 +47,17 @@ class UpdateRouter:
         if any(key in message for key in ["voice", "audio", "video_note"]):
             return ("audio", None)
 
-        # Фото - обрабатываем через Gemini Vision
+        # Фото - проверяем наличие URL в caption
         if "photo" in message:
+            # Проверяем caption на наличие URL
+            caption = message.get("caption", "")
+            if caption:
+                # Проверяем наличие обычных URL
+                urls = self._extract_urls(caption)
+                if urls:
+                    logger.info(f"Получено фото с {len(urls)} URL в caption, маршрутизация в ChoiceHandler")
+                    return ("photo_with_url", {"urls": urls})
+
             logger.info("Получено фото, маршрутизация в PhotoHandler")
             return ("photo", None)
 
