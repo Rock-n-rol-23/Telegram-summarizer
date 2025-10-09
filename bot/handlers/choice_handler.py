@@ -197,7 +197,7 @@ class ChoiceHandler(BaseHandler):
         # Получаем сохраненные данные
         pending = self.pending_choices[user_id]
         update = pending["update"]
-        urls = pending["urls"]
+        content_items = pending.get("content_items", [])
 
         # Удаляем из кэша
         del self.pending_choices[user_id]
@@ -206,14 +206,22 @@ class ChoiceHandler(BaseHandler):
         await self.delete_message(chat_id, message_id)
 
         # Обрабатываем выбор
-        if choice == "choice_photo":
-            # Обрабатываем фото
+        if choice.startswith("content_"):
+            await self._process_content_choice(update, content_items, choice)
+        elif choice == "smart_confirm":
+            # Умный режим подтвержден
+            intent = pending.get("intent", {"type": "all"})
+            await self._process_content_by_intent(update, content_items, intent)
+        elif choice == "smart_change":
+            # Пользователь хочет изменить выбор
+            await self._ask_user_choice(update, content_items)
+        elif choice == "choice_photo":
+            # Legacy: Обрабатываем фото
             await self.photo_handler.handle_photo_message(update)
-
         elif choice == "choice_url":
-            # Обрабатываем URL
+            # Legacy: Обрабатываем URL
+            urls = [item.data for item in content_items if item.type in ["url", "youtube"]]
             await self._process_urls(update, urls)
-
         else:
             logger.warning(f"Неизвестный выбор: {choice}")
 
@@ -523,6 +531,123 @@ class ChoiceHandler(BaseHandler):
         }
 
         return descriptions.get(intent_type, "весь контент")
+
+    async def _process_content_choice(self, update: dict, content_items: List[ContentItem], choice: str):
+        """
+        Обрабатывает выбор пользователя по типу контента
+
+        Args:
+            update: Telegram update object
+            content_items: Список элементов контента
+            choice: Выбор пользователя (content_text, content_image, content_url и т.д.)
+        """
+        choice_type = choice.replace("content_", "")
+
+        if choice_type == "text":
+            # Обработать только текст
+            text_items = [item for item in content_items if item.type == "text"]
+            if text_items:
+                text = text_items[0].data
+                await self.text_handler.handle_text_message(update, message_text=text)
+
+        elif choice_type == "image":
+            # Обработать изображения
+            await self.photo_handler.handle_photo_message(update)
+
+        elif choice_type == "url" or choice_type == "youtube":
+            # Обработать ссылки
+            urls = [item.data for item in content_items if item.type in ["url", "youtube"]]
+            if urls:
+                await self._process_urls(update, urls)
+
+        elif choice_type == "text_and_media":
+            # Обработать текст + медиа (пока просто весь контент)
+            await self._process_all_content_together(update, content_items)
+
+        elif choice_type == "all":
+            # Обработать всё вместе
+            await self._process_all_content_together(update, content_items)
+
+        elif choice_type == "smart":
+            # Умный выбор - запускаем определение намерения
+            message = update["message"]
+            text = message.get("text") or message.get("caption", "")
+            intent = await self._detect_user_intent(text, content_items)
+            await self._process_content_by_intent(update, content_items, intent)
+
+        else:
+            logger.warning(f"Неизвестный тип выбора: {choice_type}")
+
+    async def _process_content_by_intent(self, update: dict, content_items: List[ContentItem], intent: dict):
+        """
+        Обрабатывает контент согласно определенному намерению
+
+        Args:
+            update: Telegram update object
+            content_items: Список элементов контента
+            intent: Результат определения намерения
+        """
+        intent_type = intent.get("type", "all")
+
+        # Маппинг намерений на типы выбора
+        choice_map = {
+            "text": "content_text",
+            "image": "content_image",
+            "url": "content_url",
+            "text_and_media": "content_text_and_media",
+            "all": "content_all"
+        }
+
+        choice = choice_map.get(intent_type, "content_all")
+        await self._process_content_choice(update, content_items, choice)
+
+    async def _process_all_content_together(self, update: dict, content_items: List[ContentItem]):
+        """
+        Обрабатывает весь контент вместе
+
+        Args:
+            update: Telegram update object
+            content_items: Список элементов контента
+        """
+        message = update["message"]
+        chat_id = message["chat"]["id"]
+
+        # Собираем весь текстовый контент
+        all_text_parts = []
+
+        # Текст из сообщения
+        text_items = [item for item in content_items if item.type == "text"]
+        if text_items:
+            all_text_parts.append(f"📝 Текст сообщения:\n{text_items[0].data}")
+
+        # Текст из URL
+        urls = [item.data for item in content_items if item.type in ["url", "youtube"]]
+        if urls:
+            url_texts = []
+            for url in urls:
+                text, title = await self.url_processor.process_url(url)
+                if text:
+                    header = f"🔗 {title}" if title else f"🔗 Контент из {url}"
+                    url_texts.append(f"{header}:\n{text}")
+
+            if url_texts:
+                all_text_parts.extend(url_texts)
+
+        # Если есть изображения - обрабатываем их отдельно
+        if any(item.type == "image" for item in content_items):
+            # Сначала обрабатываем фото
+            await self.photo_handler.handle_photo_message(update)
+
+        # Объединяем весь текст и обрабатываем
+        if all_text_parts:
+            combined_text = "\n\n---\n\n".join(all_text_parts)
+            modified_update = {
+                "message": {
+                    **update["message"],
+                    "text": combined_text
+                }
+            }
+            await self.text_handler.handle_text_message(modified_update, message_text=combined_text)
 
     async def _get_user_content_settings(self, user_id: int) -> dict:
         """
