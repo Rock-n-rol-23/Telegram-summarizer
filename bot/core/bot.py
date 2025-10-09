@@ -244,6 +244,10 @@ class RefactoredBot:
             # Диспетчеризация к соответствующему handler
             if handler_type == "command":
                 await self._handle_command(update, extra_data)
+            elif handler_type == "mixed_content":
+                # Смешанный контент - обрабатываем через ChoiceHandler
+                content_items = extra_data.get("content_items", [])
+                await self.choice_handler.handle_mixed_content(update, content_items)
             elif handler_type == "text":
                 await self.text_handler.handle_text_message(update)
             elif handler_type == "document":
@@ -259,7 +263,7 @@ class RefactoredBot:
             elif handler_type == "callback":
                 # Проверяем, это callback от choice_handler или от других handlers
                 callback_data = update["callback_query"]["data"]
-                if callback_data.startswith("choice_"):
+                if callback_data.startswith("choice_") or callback_data.startswith("content_") or callback_data.startswith("smart_"):
                     await self.choice_handler.handle_choice_callback(update["callback_query"])
                 else:
                     await self.callback_handler.handle_callback_query(update["callback_query"])

@@ -1,15 +1,17 @@
-"""Обработчик выбора между обработкой фото и ссылки"""
+"""Обработчик выбора между обработкой разных типов контента"""
 
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from .base import BaseHandler
+from bot.content_detector import ContentDetector, ContentItem
+from llm.provider_router import generate_completion
 import re
 
 logger = logging.getLogger(__name__)
 
 
 class ChoiceHandler(BaseHandler):
-    """Обработчик диалога выбора между фото и ссылкой"""
+    """Обработчик диалога выбора между разными типами контента"""
 
     def __init__(
         self,
@@ -25,53 +27,149 @@ class ChoiceHandler(BaseHandler):
         self.photo_handler = photo_handler
         self.text_handler = text_handler
         self.url_processor = url_processor
+        self.content_detector = ContentDetector()
 
         # Кэш сообщений пользователей для обработки после выбора
         self.pending_choices: Dict[int, dict] = {}
 
-    async def handle_photo_with_url(self, update: dict, urls: list):
+    async def handle_mixed_content(self, update: dict, content_items: List[ContentItem]):
         """
-        Обработка сообщения с фото и URL
+        Основной метод обработки смешанного контента
 
         Args:
             update: Telegram update object
-            urls: Список найденных URL в caption
+            content_items: Список найденных элементов контента
         """
         message = update["message"]
         chat_id = message["chat"]["id"]
         user_id = message["from"]["id"]
 
-        logger.info(f"Пользователь {user_id} отправил фото с {len(urls)} URL")
+        logger.info(f"Пользователь {user_id} отправил смешанный контент: {len(content_items)} элементов")
 
-        # Сохраняем сообщение для последующей обработки
+        # Проверяем настройки пользователя
+        user_settings = await self._get_user_content_settings(user_id)
+        content_mode = user_settings.get("content_mode", "ask")  # ask, smart, all
+
+        if content_mode == "all":
+            # Обрабатываем весь контент без вопросов
+            await self._process_all_content(update, content_items)
+            return
+        elif content_mode == "smart":
+            # Умный режим - определяем намерение
+            await self._smart_process_content(update, content_items)
+            return
+        else:
+            # Режим "ask" - спрашиваем пользователя
+            await self._ask_user_choice(update, content_items)
+
+    async def _ask_user_choice(self, update: dict, content_items: List[ContentItem]):
+        """
+        Спрашивает пользователя, что обработать
+
+        Args:
+            update: Telegram update object
+            content_items: Список найденных элементов контента
+        """
+        message = update["message"]
+        chat_id = message["chat"]["id"]
+        user_id = message["from"]["id"]
+
+        # Сохраняем контент для последующей обработки
         self.pending_choices[user_id] = {
             "update": update,
-            "urls": urls,
+            "content_items": content_items,
             "message_id": message["message_id"]
         }
 
-        # Создаем inline клавиатуру для выбора
-        keyboard = self._create_choice_keyboard(len(urls))
+        # Формируем описание контента
+        content_summary = self.content_detector.get_content_summary(content_items)
 
-        # Формируем сообщение с вопросом
-        if len(urls) == 1:
-            choice_text = f"""🤔 **Что обработать?**
+        # Создаем inline клавиатуру
+        keyboard = self._create_content_choice_keyboard(content_items)
 
-Вы отправили фото с текстом, содержащим ссылку:
-{urls[0]}
+        # Формируем сообщение
+        choice_text = f"""{content_summary}
 
-Выберите, что вы хотите обработать:"""
-        else:
-            urls_text = '\n'.join(f"{i+1}. {url}" for i, url in enumerate(urls))
-            choice_text = f"""🤔 **Что обработать?**
-
-Вы отправили фото с текстом, содержащим {len(urls)} ссылки:
-{urls_text}
-
-Выберите, что вы хотите обработать:"""
+🤔 Что обработать?"""
 
         # Отправляем сообщение с выбором
         await self.send_message(chat_id, choice_text, reply_markup=keyboard)
+
+    async def _smart_process_content(self, update: dict, content_items: List[ContentItem]):
+        """
+        Умный режим - пытается определить намерение пользователя
+
+        Args:
+            update: Telegram update object
+            content_items: Список найденных элементов контента
+        """
+        message = update["message"]
+        chat_id = message["chat"]["id"]
+        user_id = message["from"]["id"]
+
+        # Получаем текст сообщения для анализа контекста
+        text = message.get("text") or message.get("caption", "")
+
+        # Анализируем намерение через LLM
+        intent = await self._detect_user_intent(text, content_items)
+
+        logger.info(f"Определено намерение пользователя {user_id}: {intent}")
+
+        # Формируем описание того, что будет обработано
+        intent_description = self._get_intent_description(intent, content_items)
+
+        # Сохраняем для обработки
+        self.pending_choices[user_id] = {
+            "update": update,
+            "content_items": content_items,
+            "intent": intent,
+            "message_id": message["message_id"]
+        }
+
+        # Создаем клавиатуру с подтверждением
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "▶️ Начать", "callback_data": f"smart_confirm"},
+                    {"text": "✏️ Изменить выбор", "callback_data": "smart_change"}
+                ]
+            ]
+        }
+
+        # Отправляем сообщение с подтверждением
+        confirmation_text = f"""✓ Обработаю: {intent_description}"""
+
+        await self.send_message(chat_id, confirmation_text, reply_markup=keyboard)
+
+    async def _process_all_content(self, update: dict, content_items: List[ContentItem]):
+        """
+        Обрабатывает весь контент без вопросов
+
+        Args:
+            update: Telegram update object
+            content_items: Список найденных элементов контента
+        """
+        # TODO: Реализовать обработку всего контента сразу
+        # Пока используем ask режим
+        await self._ask_user_choice(update, content_items)
+
+    async def handle_photo_with_url(self, update: dict, urls: list):
+        """
+        Обработка сообщения с фото и URL (legacy метод, теперь использует handle_mixed_content)
+
+        Args:
+            update: Telegram update object
+            urls: Список найденных URL в caption
+        """
+        # Детектируем контент через новый детектор
+        content_items = self.content_detector.detect_content_types(update["message"])
+
+        # Если смешанный контент - используем новый обработчик
+        if self.content_detector.is_mixed_content(content_items):
+            await self.handle_mixed_content(update, content_items)
+        else:
+            # Если только URL - обрабатываем напрямую (старая логика)
+            await self._process_urls(update, urls)
 
     async def handle_choice_callback(self, callback_query: dict):
         """
@@ -254,3 +352,195 @@ class ChoiceHandler(BaseHandler):
         except Exception as e:
             logger.error(f"Ошибка редактирования сообщения: {e}")
             return None
+
+    # ============ Новые методы для смешанного контента ============
+
+    def _create_content_choice_keyboard(self, content_items: List[ContentItem]) -> dict:
+        """
+        Создает inline клавиатуру для выбора типа контента
+
+        Args:
+            content_items: Список элементов контента
+
+        Returns:
+            Inline keyboard markup
+        """
+        buttons = []
+
+        # Группируем по типам
+        grouped = {}
+        for item in content_items:
+            if item.type not in grouped:
+                grouped[item.type] = []
+            grouped[item.type].append(item)
+
+        # Эмодзи для типов
+        emoji_map = {
+            "text": "📝",
+            "image": "🖼",
+            "url": "🔗",
+            "youtube": "▶️",
+            "pdf": "📄",
+            "document": "📎",
+            "voice": "🎤",
+            "audio": "🎵"
+        }
+
+        # Отдельные кнопки для каждого типа
+        for content_type, items in grouped.items():
+            emoji = emoji_map.get(content_type, "•")
+            count = len(items)
+
+            if count == 1:
+                if content_type == "text":
+                    text = f"{emoji} Текст"
+                elif content_type == "image":
+                    text = f"{emoji} Изображение"
+                elif content_type == "url":
+                    text = f"{emoji} Ссылку"
+                elif content_type == "youtube":
+                    text = f"{emoji} YouTube"
+                else:
+                    text = f"{emoji} {content_type.capitalize()}"
+            else:
+                if content_type == "image":
+                    text = f"{emoji} Все изображения ({count})"
+                elif content_type in ["url", "youtube"]:
+                    text = f"{emoji} Все ссылки ({count})"
+                else:
+                    text = f"{emoji} Все ({count})"
+
+            buttons.append([{
+                "text": text,
+                "callback_data": f"content_{content_type}"
+            }])
+
+        # Комбинированные кнопки если есть текст + картинки/ссылки
+        if "text" in grouped and ("image" in grouped or "url" in grouped or "youtube" in grouped):
+            combo_text = "📝🖼 Текст + картинки" if "image" in grouped else "📝🔗 Текст + ссылки"
+            buttons.append([{
+                "text": combo_text,
+                "callback_data": "content_text_and_media"
+            }])
+
+        # Кнопка "Всё вместе"
+        if len(grouped) > 1:
+            buttons.append([{
+                "text": "🎯 Всё вместе",
+                "callback_data": "content_all"
+            }])
+
+        # Кнопка "Умный выбор"
+        buttons.append([{
+            "text": "🤖 Умный выбор",
+            "callback_data": "content_smart"
+        }])
+
+        return {"inline_keyboard": buttons}
+
+    async def _detect_user_intent(self, text: str, content_items: List[ContentItem]) -> dict:
+        """
+        Определяет намерение пользователя через LLM
+
+        Args:
+            text: Текст сообщения от пользователя
+            content_items: Список элементов контента
+
+        Returns:
+            dict с информацией о намерении: {"type": "text", "reason": "..."}
+        """
+        # Формируем описание контента
+        content_desc = []
+        for item in content_items:
+            content_desc.append(f"- {item.type}: {item.description}")
+
+        content_list = "\n".join(content_desc)
+
+        # Промпт для определения намерения
+        prompt = f"""Проанализируй сообщение пользователя и определи, какой контент он хочет обработать.
+
+Текст пользователя: "{text}"
+
+Доступный контент:
+{content_list}
+
+Определи, что пользователь хочет обработать. Варианты:
+- text: только текст
+- image: только изображения
+- url: только ссылки
+- text_and_media: текст вместе с картинками/ссылками
+- all: всё вместе
+
+Ответь ТОЛЬКО в формате JSON: {{"type": "...", "reason": "краткое объяснение"}}
+Если не уверен - выбери "all"."""
+
+        try:
+            response = generate_completion(
+                prompt=prompt,
+                system="Ты - эксперт по анализу намерений пользователя. Отвечай только валидным JSON.",
+                temperature=0.1,
+                max_tokens=150
+            )
+
+            if response:
+                # Парсим JSON ответ
+                import json
+                # Извлекаем JSON из ответа
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    intent = json.loads(json_match.group())
+                    return intent
+        except Exception as e:
+            logger.error(f"Ошибка определения намерения: {e}")
+
+        # По умолчанию - всё вместе
+        return {"type": "all", "reason": "не удалось определить намерение"}
+
+    def _get_intent_description(self, intent: dict, content_items: List[ContentItem]) -> str:
+        """
+        Формирует описание намерения для пользователя
+
+        Args:
+            intent: Результат _detect_user_intent
+            content_items: Список элементов контента
+
+        Returns:
+            Строка с описанием
+        """
+        intent_type = intent.get("type", "all")
+
+        # Считаем количество элементов каждого типа
+        counts = {}
+        for item in content_items:
+            counts[item.type] = counts.get(item.type, 0) + 1
+
+        descriptions = {
+            "text": "текст",
+            "image": f"{counts.get('image', 0)} изображение(й)" if "image" in counts else "изображения",
+            "url": f"{counts.get('url', 0) + counts.get('youtube', 0)} ссылку(и)" if ("url" in counts or "youtube" in counts) else "ссылки",
+            "text_and_media": "текст + все картинки/ссылки",
+            "all": "всё вместе"
+        }
+
+        return descriptions.get(intent_type, "весь контент")
+
+    async def _get_user_content_settings(self, user_id: int) -> dict:
+        """
+        Получает настройки обработки контента для пользователя
+
+        Args:
+            user_id: ID пользователя
+
+        Returns:
+            dict с настройками: {"content_mode": "ask"|"smart"|"all"}
+        """
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            settings = await loop.run_in_executor(None, self.db.get_user_settings, user_id)
+            return {
+                "content_mode": settings.get("content_mode", "ask")
+            }
+        except Exception as e:
+            logger.error(f"Ошибка получения настроек пользователя {user_id}: {e}")
+            return {"content_mode": "ask"}

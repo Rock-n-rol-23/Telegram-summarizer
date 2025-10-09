@@ -3,6 +3,7 @@
 import logging
 import re
 from typing import Optional, Tuple
+from bot.content_detector import ContentDetector
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +13,7 @@ class UpdateRouter:
 
     def __init__(self):
         self.logger = logger
+        self.content_detector = ContentDetector()
 
     def route(self, update: dict) -> Tuple[str, Optional[dict]]:
         """
@@ -38,6 +40,14 @@ class UpdateRouter:
         if "text" in message and message["text"].startswith("/"):
             command = message["text"].split()[0].lower()
             return self._route_command(command)
+
+        # Проверяем на смешанный контент
+        content_items = self.content_detector.detect_content_types(message)
+        is_mixed = self.content_detector.is_mixed_content(content_items)
+
+        if is_mixed:
+            logger.info(f"Обнаружен смешанный контент: {len(content_items)} элементов")
+            return ("mixed_content", {"content_items": content_items})
 
         # Документы
         if "document" in message:
