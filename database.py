@@ -124,21 +124,22 @@ class DatabaseManager:
                     """)
 
                 # Миграция: добавляем content_mode если не существует
-                try:
-                    cursor.execute("SELECT content_mode FROM user_settings LIMIT 1")
-                except Exception:
-                    # Поле не существует, добавляем
-                    if self.is_postgres:
-                        cursor.execute("""
-                            ALTER TABLE user_settings
-                            ADD COLUMN IF NOT EXISTS content_mode TEXT DEFAULT 'ask'
-                        """)
-                    else:
+                if self.is_postgres:
+                    # В PostgreSQL используем IF NOT EXISTS (безопасно для существующих столбцов)
+                    cursor.execute("""
+                        ALTER TABLE user_settings
+                        ADD COLUMN IF NOT EXISTS content_mode TEXT DEFAULT 'ask'
+                    """)
+                else:
+                    # В SQLite проверяем через pragma
+                    cursor.execute("PRAGMA table_info(user_settings)")
+                    columns = [col[1] for col in cursor.fetchall()]
+                    if 'content_mode' not in columns:
                         cursor.execute("""
                             ALTER TABLE user_settings
                             ADD COLUMN content_mode TEXT DEFAULT 'ask'
                         """)
-                    logger.info("Добавлено поле content_mode в user_settings")
+                        logger.info("Добавлено поле content_mode в user_settings")
                 
                 # Таблица статистики системы
                 if self.is_postgres:
