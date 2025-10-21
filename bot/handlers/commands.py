@@ -4,7 +4,8 @@ import logging
 import sqlite3
 from typing import Optional, Dict
 from .base import BaseHandler
-from bot.constants import WELCOME_MESSAGE_HTML
+from bot.constants import WELCOME_MESSAGE_HTML, MAIN_MENU_TEXT
+from bot.ui_components import UIComponents, Messages, AchievementSystem
 
 # Проверка доступности улучшенной аудио обработки
 try:
@@ -39,7 +40,9 @@ class CommandHandler(BaseHandler):
         # Очищаем любые пользовательские клавиатуры
         await self.clear_custom_keyboards(chat_id)
 
-        await self.send_message(chat_id, WELCOME_MESSAGE_HTML, parse_mode="HTML")
+        # Отправляем приветствие с inline кнопками выбора режима
+        keyboard = UIComponents.welcome_quick_start()
+        await self.send_message(chat_id, WELCOME_MESSAGE_HTML, parse_mode="HTML", reply_markup=keyboard)
 
     async def handle_help(self, update: dict):
         """Обработка команды /help"""
@@ -138,7 +141,7 @@ class CommandHandler(BaseHandler):
         logger.info(f"Пользователь {user_id} {'включил' if new_mode else 'отключил'} умную суммаризацию")
 
     async def handle_stats(self, update: dict):
-        """Обработка команды /stats"""
+        """Обработка команды /stats - улучшенная версия с достижениями"""
         chat_id = update["message"]["chat"]["id"]
         user_id = update["message"]["from"]["id"]
 
@@ -154,17 +157,78 @@ class CommandHandler(BaseHandler):
                 'first_request': None
             }
 
-        stats_text = (
-            f"📊 Ваша статистика:\n\n"
-            f"• Обработано текстов: {user_stats['total_requests']}\n"
-            f"• Символов обработано: {user_stats['total_chars']:,}\n"
-            f"• Символов в саммари: {user_stats['total_summary_chars']:,}\n"
-            f"• Среднее сжатие: {user_stats['avg_compression']:.1%}\n"
-            f"• Первый запрос: {user_stats['first_request'] or 'Нет данных'}\n\n"
-            f"📈 Используйте бота для обработки длинных текстов и статей!"
-        )
+        # Вычисляем интересные метрики
+        total_requests = user_stats['total_requests']
+        total_chars = user_stats['total_chars']
+        total_summary_chars = user_stats['total_summary_chars']
+        avg_compression = user_stats['avg_compression']
 
-        await self.send_message(chat_id, stats_text)
+        # Оценка сэкономленного времени (200 слов/мин)
+        avg_chars_per_word = 5
+        words_saved = (total_chars - total_summary_chars) / avg_chars_per_word
+        time_saved_minutes = words_saved / 200
+        time_saved_hours = int(time_saved_minutes / 60)
+
+        # Оценка эквивалента в книгах (средняя книга ~300к символов)
+        books_equivalent = total_chars / 300000
+
+        # Средний размер текста
+        avg_text_size = total_chars / total_requests if total_requests > 0 else 0
+
+        # Проверяем достижения
+        unlocked, locked = AchievementSystem.check_unlocked(user_stats)
+
+        stats_text = f"""🏆 <b>ТВОЯ СТАТИСТИКА</b>
+
+📚 Ты обработал <b>{total_requests}</b> {self._pluralize_texts(total_requests)}"""
+
+        if books_equivalent >= 1:
+            stats_text += f" — это как прочитать <b>{books_equivalent:.1f}</b> {self._pluralize_books(int(books_equivalent))}!"
+        else:
+            stats_text += "!"
+
+        if time_saved_hours > 0:
+            stats_text += f"\n⚡ Сэкономил <b>~{time_saved_hours}</b> {self._pluralize_hours(time_saved_hours)} времени на чтение"
+
+        stats_text += f"\n🎯 Сжал <b>{total_chars:,}</b> символов → <b>{total_summary_chars:,}</b> (экономия {(1-avg_compression)*100:.0f}%)"
+
+        # Достижения
+        stats_text += f"\n\n{AchievementSystem.format_achievements_text(unlocked, locked)}"
+
+        if avg_text_size > 0:
+            reading_time = int((avg_text_size / avg_chars_per_word) / 200)
+            stats_text += f"\n💡 <b>Интересно:</b> Твой средний текст = <b>{int(avg_text_size):,}</b> символов (~{reading_time} мин чтения)"
+
+        # Кнопка назад в меню
+        keyboard = UIComponents.back_to_menu()
+        await self.send_message(chat_id, stats_text, parse_mode="HTML", reply_markup=keyboard)
+
+    def _pluralize_texts(self, count: int) -> str:
+        """Склонение слова 'текст'"""
+        if count % 10 == 1 and count % 100 != 11:
+            return "текст"
+        elif count % 10 in [2, 3, 4] and count % 100 not in [12, 13, 14]:
+            return "текста"
+        else:
+            return "текстов"
+
+    def _pluralize_books(self, count: int) -> str:
+        """Склонение слова 'книга'"""
+        if count % 10 == 1 and count % 100 != 11:
+            return "книгу"
+        elif count % 10 in [2, 3, 4] and count % 100 not in [12, 13, 14]:
+            return "книги"
+        else:
+            return "книг"
+
+    def _pluralize_hours(self, count: int) -> str:
+        """Склонение слова 'час'"""
+        if count % 10 == 1 and count % 100 != 11:
+            return "час"
+        elif count % 10 in [2, 3, 4] and count % 100 not in [12, 13, 14]:
+            return "часа"
+        else:
+            return "часов"
 
     async def handle_compression(self, update: dict, compression_level: int):
         """Обработка команд уровня детальности саммари"""
