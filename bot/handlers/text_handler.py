@@ -7,6 +7,7 @@ from typing import Dict, Set, Optional
 from datetime import datetime
 from .base import BaseHandler
 from llm.provider_router import generate_completion
+from bot.ui_components import UIComponents
 
 logger = logging.getLogger(__name__)
 
@@ -171,8 +172,8 @@ class TextHandler(BaseHandler):
                 if processing_message_id:
                     await self.delete_message(chat_id, processing_message_id)
 
-                # Создаем inline клавиатуру с кнопками уровней сжатия
-                keyboard = self._get_compression_keyboard(user_compression_level)
+                # Создаем inline клавиатуру с быстрыми действиями
+                keyboard = UIComponents.summary_actions(user_id, summary_id=str(user_id))
 
                 # Отправляем саммари и сохраняем message_id
                 result = await self.send_message(chat_id, response_text, reply_markup=keyboard)
