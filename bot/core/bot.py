@@ -266,6 +266,10 @@ class RefactoredBot:
                 # Фото с URL - даем пользователю выбрать что обрабатывать
                 urls = extra_data.get("urls", [])
                 await self.choice_handler.handle_photo_with_url(update, urls)
+            elif handler_type == "text_with_youtube":
+                # Текст с YouTube URL - даем пользователю выбрать что обрабатывать
+                urls = extra_data.get("urls", [])
+                await self.choice_handler.handle_text_with_youtube(update, urls)
             elif handler_type == "callback":
                 # Проверяем, это callback от choice_handler или от других handlers
                 callback_data = update["callback_query"]["data"]

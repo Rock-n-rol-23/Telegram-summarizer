@@ -171,6 +171,66 @@ class ChoiceHandler(BaseHandler):
             # Если только URL - обрабатываем напрямую (старая логика)
             await self._process_urls(update, urls)
 
+    async def handle_text_with_youtube(self, update: dict, urls: list):
+        """
+        Обработка сообщения с текстом и YouTube URL
+        Показывает inline кнопки для выбора: обработать текст или YouTube видео
+
+        Args:
+            update: Telegram update object
+            urls: Список найденных YouTube URL
+        """
+        message = update["message"]
+        chat_id = message["chat"]["id"]
+        user_id = message["from"]["id"]
+        text = message.get("text", "")
+
+        logger.info(f"Пользователь {user_id} отправил текст с YouTube URL, спрашиваем что обработать")
+
+        # Сохраняем данные для последующей обработки
+        self.pending_choices[user_id] = {
+            "update": update,
+            "youtube_urls": urls,
+            "text": text,
+            "message_id": message["message_id"],
+            "type": "text_with_youtube"
+        }
+
+        # Создаем inline клавиатуру с выбором
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "📝 Обработать текст",
+                        "callback_data": "choice_text_only"
+                    }
+                ],
+                [
+                    {
+                        "text": "▶️ Обработать YouTube видео",
+                        "callback_data": "choice_youtube_only"
+                    }
+                ],
+                [
+                    {
+                        "text": "🎯 Обработать всё",
+                        "callback_data": "choice_text_and_youtube"
+                    }
+                ]
+            ]
+        }
+
+        # Формируем красивое сообщение
+        choice_text = f"""📝 <b>В сообщении обнаружен текст и YouTube ссылка</b>
+
+▶️ <b>YouTube:</b> {urls[0]}
+📝 <b>Текст:</b> {len(text)} символов
+
+🤔 <b>Что обработать?</b>"""
+
+        # Отправляем сообщение с выбором
+        await self.send_message(chat_id, choice_text, reply_markup=keyboard, parse_mode="HTML")
+
     async def handle_choice_callback(self, callback_query: dict):
         """
         Обработка callback от inline кнопок выбора
@@ -222,6 +282,15 @@ class ChoiceHandler(BaseHandler):
             # Legacy: Обрабатываем URL
             urls = [item.data for item in content_items if item.type in ["url", "youtube"]]
             await self._process_urls(update, urls)
+        elif choice == "choice_text_only":
+            # Обработка только текста (без YouTube)
+            await self._process_text_only(update, pending)
+        elif choice == "choice_youtube_only":
+            # Обработка только YouTube видео (без текста)
+            await self._process_youtube_only(update, pending)
+        elif choice == "choice_text_and_youtube":
+            # Обработка и текста, и YouTube видео
+            await self._process_text_and_youtube(update, pending)
         else:
             logger.warning(f"Неизвестный выбор: {choice}")
 
@@ -669,3 +738,117 @@ class ChoiceHandler(BaseHandler):
         except Exception as e:
             logger.error(f"Ошибка получения настроек пользователя {user_id}: {e}")
             return {"content_mode": "ask"}
+
+    async def _process_text_only(self, update: dict, pending: dict):
+        """
+        Обработка только текста из сообщения (без YouTube)
+
+        Args:
+            update: Telegram update object
+            pending: Сохраненные данные из pending_choices
+        """
+        import re
+
+        text = pending.get("text", "")
+        youtube_urls = pending.get("youtube_urls", [])
+
+        # Удаляем YouTube URL из текста
+        text_without_youtube = text
+        for url in youtube_urls:
+            # Удаляем все варианты YouTube URL
+            text_without_youtube = re.sub(
+                r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)[a-zA-Z0-9_-]{11}',
+                '',
+                text_without_youtube
+            )
+
+        text_without_youtube = text_without_youtube.strip()
+
+        if len(text_without_youtube) < 10:
+            await self.send_message(
+                update["message"]["chat"]["id"],
+                "❌ Недостаточно текста для обработки после удаления YouTube ссылок."
+            )
+            return
+
+        logger.info(f"Обработка только текста ({len(text_without_youtube)} символов), YouTube ссылки проигнорированы")
+
+        # Создаем модифицированное сообщение только с текстом
+        modified_update = {
+            "message": {
+                **update["message"],
+                "text": text_without_youtube
+            }
+        }
+
+        await self.text_handler.handle_text_message(modified_update, message_text=text_without_youtube)
+
+    async def _process_youtube_only(self, update: dict, pending: dict):
+        """
+        Обработка только YouTube видео (без текста)
+
+        Args:
+            update: Telegram update object
+            pending: Сохраненные данные из pending_choices
+        """
+        youtube_urls = pending.get("youtube_urls", [])
+
+        if not youtube_urls:
+            await self.send_message(
+                update["message"]["chat"]["id"],
+                "❌ Не найдены YouTube ссылки для обработки."
+            )
+            return
+
+        logger.info(f"Обработка только YouTube видео: {youtube_urls[0]}")
+
+        # Вызываем TextHandler напрямую для обработки YouTube
+        # TextHandler сам обнаружит YouTube URL и обработает его через _handle_youtube_message
+        await self.text_handler.handle_text_message(update)
+
+    async def _process_text_and_youtube(self, update: dict, pending: dict):
+        """
+        Обработка и текста, и YouTube видео
+
+        Args:
+            update: Telegram update object
+            pending: Сохраненные данные из pending_choices
+        """
+        import re
+
+        text = pending.get("text", "")
+        youtube_urls = pending.get("youtube_urls", [])
+        chat_id = update["message"]["chat"]["id"]
+
+        # Сначала обрабатываем YouTube
+        logger.info(f"Обработка текста И YouTube: сначала YouTube ({youtube_urls[0]})")
+        await self.text_handler.handle_text_message(update)
+
+        # Затем обрабатываем текст без YouTube URL
+        text_without_youtube = text
+        for url in youtube_urls:
+            text_without_youtube = re.sub(
+                r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)[a-zA-Z0-9_-]{11}',
+                '',
+                text_without_youtube
+            )
+
+        text_without_youtube = text_without_youtube.strip()
+
+        if len(text_without_youtube) >= 10:
+            # Отправляем разделитель
+            await self.send_message(chat_id, "─────────────────\n📝 <b>Теперь обрабатываю текст:</b>", parse_mode="HTML")
+
+            logger.info(f"Теперь обрабатываем текст ({len(text_without_youtube)} символов)")
+
+            # Создаем модифицированное сообщение с текстом
+            modified_update = {
+                "message": {
+                    **update["message"],
+                    "text": text_without_youtube
+                }
+            }
+
+            await self.text_handler.handle_text_message(modified_update, message_text=text_without_youtube)
+        else:
+            logger.info("Текст слишком короткий после удаления YouTube URL, пропускаем")

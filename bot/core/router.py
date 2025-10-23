@@ -101,7 +101,24 @@ class UpdateRouter:
             # Проверяем наличие YouTube ссылок
             youtube_urls = self._extract_youtube_urls(text)
             if youtube_urls:
-                return ("youtube", {"urls": youtube_urls})
+                # Проверяем, есть ли в сообщении еще и текст кроме YouTube URL
+                text_without_urls = text
+                for url in youtube_urls:
+                    # Удаляем все варианты YouTube URL из текста
+                    text_without_urls = re.sub(
+                        r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)[a-zA-Z0-9_-]{11}',
+                        '',
+                        text_without_urls
+                    )
+
+                # Если после удаления URL остался осмысленный текст (больше 10 символов)
+                text_without_urls = text_without_urls.strip()
+                if len(text_without_urls) > 10:
+                    logger.info(f"Обнаружен текст ({len(text_without_urls)} символов) с YouTube URL, маршрутизация в ChoiceHandler")
+                    return ("text_with_youtube", {"urls": youtube_urls, "text": text})
+                else:
+                    # Только YouTube URL без значимого текста
+                    return ("youtube", {"urls": youtube_urls})
 
             # Проверяем наличие обычных URL
             urls = self._extract_urls(text)
