@@ -87,6 +87,11 @@ class RefactoredBot:
         # Offset для long polling
         self.update_offset = 0
 
+        # Throttling для логирования ошибок
+        self._last_error_log_time = 0
+        self._error_log_interval = 10  # Логировать ошибки максимум раз в 10 секунд
+        self._consecutive_502_errors = 0
+
         logger.info("RefactoredBot инициализирован")
 
     async def start(self):
@@ -309,7 +314,7 @@ class RefactoredBot:
             logger.warning(f"Неизвестная команда: {command}")
 
     async def _get_updates(self) -> list:
-        """Получение обновлений от Telegram API"""
+        """Получение обновлений от Telegram API с retry логикой"""
         url = f"{self.base_url}/getUpdates"
         params = {
             "offset": self.update_offset,
@@ -317,19 +322,61 @@ class RefactoredBot:
             "allowed_updates": ["message", "callback_query"],
         }
 
-        try:
-            async with self.session.get(url, params=params, timeout=35) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return data.get("result", [])
-                else:
-                    logger.error(f"Ошибка getUpdates: {response.status}")
-                    return []
-        except asyncio.TimeoutError:
-            return []
-        except Exception as e:
-            logger.error(f"Ошибка запроса getUpdates: {e}")
-            return []
+        max_retries = 3
+        retry_delay = 1  # Начальная задержка в секундах
+
+        for attempt in range(max_retries):
+            try:
+                async with self.session.get(url, params=params, timeout=35) as response:
+                    if response.status == 200:
+                        # Успешный запрос - сбрасываем счетчик ошибок
+                        self._consecutive_502_errors = 0
+                        data = await response.json()
+                        return data.get("result", [])
+                    elif response.status == 502:
+                        # 502 Bad Gateway - временная проблема
+                        self._consecutive_502_errors += 1
+
+                        # Логируем только периодически, чтобы не спамить
+                        import time
+                        current_time = time.time()
+                        if current_time - self._last_error_log_time > self._error_log_interval:
+                            logger.warning(
+                                f"Telegram API 502 (попытка {attempt + 1}/{max_retries}). "
+                                f"Последовательных ошибок: {self._consecutive_502_errors}"
+                            )
+                            self._last_error_log_time = current_time
+
+                        # Retry с exponential backoff
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
+                        continue
+                    else:
+                        # Другие ошибки - логируем один раз
+                        import time
+                        current_time = time.time()
+                        if current_time - self._last_error_log_time > self._error_log_interval:
+                            logger.error(f"Ошибка getUpdates: {response.status}")
+                            self._last_error_log_time = current_time
+                        return []
+            except asyncio.TimeoutError:
+                # Таймаут - это нормально для long polling
+                return []
+            except Exception as e:
+                import time
+                current_time = time.time()
+                if current_time - self._last_error_log_time > self._error_log_interval:
+                    logger.error(f"Ошибка запроса getUpdates: {e}")
+                    self._last_error_log_time = current_time
+
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+                continue
+
+        # Все попытки исчерпаны
+        return []
 
     async def _get_me(self) -> Optional[dict]:
         """Получение информации о боте"""
