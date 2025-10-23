@@ -30,7 +30,8 @@ class TextHandler(BaseHandler):
         user_settings: Dict,
         user_messages_buffer: Dict,
         db_executor,
-        url_processor=None
+        url_processor=None,
+        youtube_processor=None
     ):
         super().__init__(session, base_url, db, state_manager)
         self.groq_client = groq_client
@@ -43,6 +44,7 @@ class TextHandler(BaseHandler):
         self.user_messages_buffer = user_messages_buffer
         self.db_executor = db_executor
         self.url_processor = url_processor
+        self.youtube_processor = youtube_processor
 
         # Кэш последних текстов пользователей для пересоздания саммари
         self.user_last_texts: Dict[int, str] = {}
@@ -76,7 +78,17 @@ class TextHandler(BaseHandler):
             url_pattern = r'https?://[^\s]+'
             urls = re.findall(url_pattern, text)
 
-            # Фильтруем YouTube URL (они обрабатываются отдельно)
+            # Сначала проверяем YouTube URL
+            youtube_pattern = r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})'
+            youtube_urls = re.findall(youtube_pattern, text)
+
+            if youtube_urls:
+                logger.info(f"Найдены YouTube URL в тексте: {len(youtube_urls)}")
+                # Обрабатываем YouTube вместо текста
+                await self._handle_youtube_message(update, youtube_urls)
+                return
+
+            # Фильтруем YouTube URL из обычных URL (они уже обработаны выше)
             urls = [url for url in urls if 'youtube.com' not in url and 'youtu.be' not in url]
 
             if urls:
@@ -625,6 +637,190 @@ class TextHandler(BaseHandler):
         ]
 
         return {"inline_keyboard": buttons}
+
+    async def _handle_youtube_message(self, update: dict, video_ids: list):
+        """
+        Обработка YouTube ссылок
+
+        Args:
+            update: Telegram update object
+            video_ids: Список ID YouTube видео
+        """
+        message = update["message"]
+        chat_id = message["chat"]["id"]
+        user_id = message["from"]["id"]
+        username = message["from"].get("username", "")
+
+        logger.info(f"Обработка {len(video_ids)} YouTube видео от пользователя {user_id}")
+
+        # Проверяем наличие youtube_processor
+        if not self.youtube_processor:
+            await self.send_message(
+                chat_id,
+                "❌ YouTube обработка недоступна!\n\nПопробуйте позже."
+            )
+            return
+
+        # Проверка лимита запросов
+        if not self.check_user_rate_limit(user_id):
+            await self.send_message(
+                chat_id,
+                "⏰ Превышен лимит запросов!\n\n"
+                "Пожалуйста, подождите минуту. Лимит: 10 запросов в минуту."
+            )
+            return
+
+        # Проверка на повторную обработку
+        if user_id in self.processing_users:
+            await self.send_message(
+                chat_id,
+                "⚠️ Обработка в процессе!\n\n"
+                "Дождитесь завершения предыдущего запроса."
+            )
+            return
+
+        # Добавляем пользователя в список обрабатываемых
+        self.processing_users.add(user_id)
+
+        try:
+            # Формируем полный URL
+            video_url = f"https://www.youtube.com/watch?v={video_ids[0]}"
+
+            # Отправляем сообщение о начале обработки
+            processing_msg = await self.send_message(
+                chat_id,
+                f"▶️ Обрабатываю YouTube видео...\n\n⏳ Извлекаю субтитры и метаданные..."
+            )
+            processing_msg_id = processing_msg.get("result", {}).get("message_id") if processing_msg else None
+
+            # Проверяем валидность видео
+            validation = self.youtube_processor.validate_youtube_url(video_url)
+
+            if not validation.get('valid'):
+                # Удаляем сообщение о обработке
+                if processing_msg_id:
+                    await self.delete_message(chat_id, processing_msg_id)
+
+                error_msg = validation.get('error', 'Неизвестная ошибка')
+                await self.send_message(chat_id, error_msg)
+                return
+
+            # Обновляем прогресс
+            if processing_msg_id:
+                await self.edit_message_text(
+                    chat_id,
+                    processing_msg_id,
+                    f"▶️ Обрабатываю: {validation.get('title', 'Видео')}\n\n⏳ Извлекаю субтитры..."
+                )
+
+            # Извлекаем информацию и субтитры
+            result = self.youtube_processor.extract_video_info_and_subtitles(video_url)
+
+            if not result.get('success'):
+                # Удаляем сообщение о обработке
+                if processing_msg_id:
+                    await self.delete_message(chat_id, processing_msg_id)
+
+                error_msg = result.get('error', '❌ Не удалось обработать видео')
+                await self.send_message(chat_id, error_msg)
+                return
+
+            # Получаем текст для суммаризации
+            text_to_summarize = result.get('combined_text', '')
+
+            if len(text_to_summarize) < 100:
+                # Удаляем сообщение о обработке
+                if processing_msg_id:
+                    await self.delete_message(chat_id, processing_msg_id)
+
+                await self.send_message(
+                    chat_id,
+                    "❌ Недостаточно текста для саммари!\n\n"
+                    "Видео не содержит субтитров или они слишком короткие."
+                )
+                return
+
+            # Обновляем прогресс
+            if processing_msg_id:
+                await self.edit_message_text(
+                    chat_id,
+                    processing_msg_id,
+                    f"▶️ {validation.get('title', 'Видео')}\n\n⏳ Создаю саммари..."
+                )
+
+            # Суммаризуем текст
+            import time
+            start_time = time.time()
+
+            user_compression_level = await self.get_user_compression_level(user_id)
+            target_ratio = user_compression_level / 100.0
+
+            summary = await self.summarize_text(text_to_summarize, target_ratio=target_ratio)
+            processing_time = time.time() - start_time
+
+            # Удаляем сообщение о обработке
+            if processing_msg_id:
+                await self.delete_message(chat_id, processing_msg_id)
+
+            if summary and not summary.startswith("❌"):
+                # Сохраняем запрос в БД
+                try:
+                    await self._run_in_executor(
+                        self.db.save_user_request,
+                        user_id,
+                        username,
+                        len(text_to_summarize),
+                        len(summary),
+                        processing_time,
+                        "youtube",
+                    )
+                except Exception as save_error:
+                    logger.error(f"Ошибка сохранения в БД: {save_error}")
+
+                # Формируем ответ
+                video_title = validation.get('title', 'YouTube видео')
+                duration_min = validation.get('duration', 0) // 60
+
+                response_text = f"""▶️ <b>YouTube Саммари</b>
+
+🎬 <b>{video_title}</b>
+⏱️ Длительность: {duration_min} мин
+
+{summary}
+
+📊 <b>Статистика:</b>
+• Исходный текст: {len(text_to_summarize):,} символов
+• Саммари: {len(summary):,} символов
+• Время обработки: {processing_time:.1f}с"""
+
+                # Кнопки быстрых действий
+                from bot.ui_components import UIComponents
+                keyboard = UIComponents.summary_actions(user_id, summary_id=str(user_id))
+
+                result = await self.send_message(chat_id, response_text, parse_mode="HTML", reply_markup=keyboard)
+
+                if result and "result" in result:
+                    summary_message_id = result["result"]["message_id"]
+                    # Сохраняем для пересоздания
+                    self.user_last_texts[user_id] = text_to_summarize
+                    self.user_summary_messages[user_id] = summary_message_id
+
+                logger.info(f"Успешно обработано YouTube видео для пользователя {user_id}")
+            else:
+                await self.send_message(
+                    chat_id,
+                    "❌ Ошибка при создании саммари!\n\nПопробуйте позже."
+                )
+
+        except Exception as e:
+            logger.error(f"Ошибка обработки YouTube: {e}", exc_info=True)
+            await self.send_message(
+                chat_id,
+                f"❌ Ошибка обработки YouTube видео!\n\n{str(e)}"
+            )
+        finally:
+            # Удаляем пользователя из списка обрабатываемых
+            self.processing_users.discard(user_id)
 
     async def _handle_url_message(self, update: dict, urls: list):
         """

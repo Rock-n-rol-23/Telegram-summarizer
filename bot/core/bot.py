@@ -146,6 +146,7 @@ class RefactoredBot:
             user_messages_buffer=self.user_messages_buffer,
             db_executor=self.executor,
             url_processor=self.url_processor,
+            youtube_processor=self.youtube_processor,
         )
 
         # DocumentHandler
