@@ -40,34 +40,26 @@ async def main():
     logger.info("Инициализация state manager...")
     state_manager = StateManager()
 
-    # Инициализация Groq клиента (если доступен)
+    # Инициализация Groq клиента (опциональный fallback)
     groq_client = None
-    if config.GROQ_API_KEY and config.ENABLE_GROQ_FALLBACK:
+    if config.GROQ_API_KEY:
         try:
             from groq import Groq
             groq_client = Groq(api_key=config.GROQ_API_KEY)
-            logger.info("✅ Groq клиент инициализирован")
+            logger.info("✅ Groq клиент инициализирован (fallback)")
         except Exception as e:
             logger.warning(f"⚠️  Не удалось инициализировать Groq: {e}")
 
-    # Инициализация OpenRouter клиента (если доступен)
+    # OpenRouter больше не используется (убран для упрощения)
     openrouter_client = None
-    if config.OPENROUTER_API_KEY:
-        try:
-            from openai import AsyncOpenAI
-            openrouter_client = AsyncOpenAI(
-                api_key=config.OPENROUTER_API_KEY,
-                base_url="https://openrouter.ai/api/v1"
-            )
-            logger.info("✅ OpenRouter клиент инициализирован")
-        except Exception as e:
-            logger.warning(f"⚠️  Не удалось инициализировать OpenRouter: {e}")
 
-    # Проверка наличия хотя бы одного LLM клиента
-    if not groq_client and not openrouter_client:
-        logger.error("❌ Не инициализирован ни один LLM клиент (Groq/OpenRouter)")
-        logger.error("❌ Установите GROQ_API_KEY или OPENROUTER_API_KEY в .env")
-        return
+    # Проверка наличия основного LLM провайдера (Gemini)
+    if not config.GEMINI_API_KEY:
+        logger.error("❌ GEMINI_API_KEY не найден")
+        logger.error("❌ Установите GEMINI_API_KEY в переменных окружения")
+        if not groq_client:
+            logger.error("❌ Также установите GROQ_API_KEY для fallback")
+            return
 
     # Инициализация процессоров
     logger.info("Инициализация процессоров...")
