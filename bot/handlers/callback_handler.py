@@ -11,9 +11,10 @@ logger = logging.getLogger(__name__)
 class CallbackHandler(BaseHandler):
     """Обработчик callback queries от inline кнопок"""
 
-    def __init__(self, session, base_url, db, state_manager, text_handler=None):
+    def __init__(self, session, base_url, db, state_manager, text_handler=None, audio_handler=None):
         super().__init__(session, base_url, db, state_manager)
         self.text_handler = text_handler
+        self.audio_handler = audio_handler
 
     async def handle_callback_query(self, callback_query: dict):
         """Обработка callback query"""
@@ -63,6 +64,13 @@ class CallbackHandler(BaseHandler):
                 await self.handle_settings_level(query_id, chat_id, message_id, user_id, callback_data)
             elif callback_data.startswith("action_"):
                 await self.handle_summary_action(query_id, chat_id, message_id, user_id, callback_data)
+            elif callback_data.startswith("audio_transcript_") or callback_data.startswith("audio_reasoning_"):
+                # Передаём обработку audio handler'у
+                if self.audio_handler:
+                    await self.audio_handler.handle_audio_callback(callback_query)
+                else:
+                    await self.answer_callback_query(query_id, "❌ Audio handler недоступен")
+                    logger.error("AudioHandler не инициализирован в CallbackHandler!")
             else:
                 # Неизвестный callback
                 await self.answer_callback_query(query_id, "⚠️ Неизвестная команда")

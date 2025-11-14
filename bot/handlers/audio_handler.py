@@ -37,6 +37,10 @@ class AudioHandler(BaseHandler):
         self.processing_users = processing_users
         self.db_executor = db_executor
 
+        # Временное хранилище для аудио данных (transcript, segments, reasoning)
+        # Ключ: message_id, значение: {transcript, segments, speaker_data, reasoning}
+        self.audio_data_cache = {}
+
     async def handle_audio_message(self, update: dict):
         """Универсальная обработка всех типов аудио сообщений"""
         from utils.tg_audio import (
@@ -209,33 +213,18 @@ class AudioHandler(BaseHandler):
                     await self.send_message(chat_id, error_msg)
                 return
 
-            # Попытка smart суммаризации
+            # Суммаризация с reasoning
             summary = None
-            if hasattr(self, "smart_summarizer") and self.smart_summarizer:
-                try:
-                    compression_level = await self.get_user_compression_level(user_id)
-                    target_ratio = compression_level / 100.0
+            reasoning = None
 
-                    smart_result = await self.smart_summarizer.smart_summarize(
-                        transcript,
-                        source_type="audio",
-                        source_name=filename_hint,
-                        compression_ratio=target_ratio,
-                    )
-
-                    if smart_result.get("success"):
-                        summary = smart_result.get("summary", "")
-                except Exception as e:
-                    logger.warning(f"SmartSummarizer не сработал: {e}")
-
-            # Фолбэк суммаризация через Groq
-            if not summary and self.groq_client:
-                try:
-                    compression_level = await self.get_user_compression_level(user_id)
-                    target_ratio = compression_level / 100.0
-                    summary = await self.summarize_text(transcript, target_ratio)
-                except Exception as e:
-                    logger.warning(f"Groq суммаризация не сработала: {e}")
+            try:
+                compression_level = await self.get_user_compression_level(user_id)
+                target_ratio = compression_level / 100.0
+                result = await self.summarize_audio_with_reasoning(transcript, target_ratio)
+                summary = result.get("summary", "")
+                reasoning = result.get("reasoning", "")
+            except Exception as e:
+                logger.warning(f"Суммаризация с reasoning не сработала: {e}")
 
             # Если нет саммаризации, показываем транскрипт
             if not summary:
@@ -245,7 +234,7 @@ class AudioHandler(BaseHandler):
                     + ("..." if len(transcript) > 1000 else "")
                 )
 
-            # Формируем финальный ответ с улучшениями
+            # Формируем финальный ответ (только саммари, без транскрипта по умолчанию)
             duration_text = f" ({format_duration(duration)})" if duration else ""
 
             # Заголовок
@@ -256,81 +245,49 @@ class AudioHandler(BaseHandler):
                 num_speakers = speaker_emotion_data["num_speakers"]
                 final_message += f"👥 Обнаружено спикеров: {num_speakers}\n\n"
 
-            # Саммари
-            final_message += f"📋 **Саммари:**\n{summary}\n\n"
-
-            # Таймлайн (для длинных аудио > 2 минут)
-            if duration and duration > 120 and segments and len(segments) > 3:
-                final_message += "⏱️ **Таймлайн:**\n"
-                # Группируем сегменты в блоки по ~30-60 секунд
-                timeline_entries = []
-                current_block = []
-                block_start_time = 0
-
-                for i, seg in enumerate(segments):
-                    if not current_block:
-                        block_start_time = seg["start"]
-                    current_block.append(seg["text"].strip())
-
-                    # Создаем блок каждые 30-60 секунд или последний сегмент
-                    if (seg["end"] - block_start_time > 45) or (i == len(segments) - 1):
-                        timestamp = self.audio_processor.format_timestamp(block_start_time)
-                        block_text = " ".join(current_block)
-                        # Берем первые 60 символов как краткое описание
-                        block_summary = block_text[:60] + "..." if len(block_text) > 60 else block_text
-                        timeline_entries.append(f"• {timestamp} - {block_summary}")
-                        current_block = []
-
-                # Показываем до 8 записей таймлайна
-                final_message += "\n".join(timeline_entries[:8])
-                if len(timeline_entries) > 8:
-                    final_message += f"\n... и ещё {len(timeline_entries) - 8} временных меток"
-                final_message += "\n\n"
-
-            # Транскрипт с спикерами и эмоциями (для коротких аудио < 2 минут или если есть несколько спикеров)
-            show_detailed_transcript = False
-            if speaker_emotion_data and speaker_emotion_data.get("num_speakers", 1) > 1:
-                show_detailed_transcript = True
-            elif duration and duration < 120:
-                show_detailed_transcript = True
-
-            if show_detailed_transcript and segments and speaker_emotion_data:
-                final_message += "💬 **Транскрипт:**\n"
-                speaker_map = speaker_emotion_data.get("speaker_map", {})
-                emotion_map = speaker_emotion_data.get("emotion_map", {})
-
-                for i, seg in enumerate(segments[:15]):  # Показываем до 15 сегментов
-                    speaker = speaker_map.get(i, "Спикер 1")
-                    emotion = emotion_map.get(i, "")
-                    emotion_emoji = self._get_emotion_emoji(emotion)
-                    text = seg["text"].strip()
-
-                    if emotion and emotion != "нейтрально":
-                        final_message += f"{speaker} {emotion_emoji}: {text}\n"
-                    else:
-                        final_message += f"{speaker}: {text}\n"
-
-                if len(segments) > 15:
-                    final_message += f"... и ещё {len(segments) - 15} фраз\n"
+            # Развёрнутое саммари
+            final_message += summary
 
             # Ограничиваем длину сообщения (Telegram лимит 4096)
             if len(final_message) > 4000:
-                # Урезаем до базового формата
-                final_message = f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n{summary}"
-                if len(final_message) > 4000:
-                    summary_limit = 4000 - len(f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n") - 50
-                    summary = summary[:summary_limit] + "..."
-                    final_message = f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n{summary}"
+                # Урезаем саммари
+                summary_limit = 4000 - len(f"🎧 {audio_info}{duration_text}\n\n") - 100
+                summary_short = summary[:summary_limit] + "\n\n... [саммари урезано из-за лимита длины сообщения]"
+                final_message = f"🎧 {audio_info}{duration_text}\n\n" + summary_short
 
-            # Отправляем результат
+            # Создаём inline-клавиатуру с кнопками
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "📋 Показать транскрипт", "callback_data": f"audio_transcript_{message['message_id']}"},
+                        {"text": "🧠 Показать reasoning", "callback_data": f"audio_reasoning_{message['message_id']}"}
+                    ]
+                ]
+            }
+
+            # Сохраняем данные в кэш для последующего показа
+            self.audio_data_cache[message['message_id']] = {
+                "transcript": transcript,
+                "segments": segments,
+                "speaker_emotion_data": speaker_emotion_data,
+                "reasoning": reasoning,
+                "duration": duration
+            }
+
+            # Отправляем результат с кнопками
             if progress_message_id and isinstance(progress_message_id, int):
                 try:
-                    await self.edit_message_text(chat_id, progress_message_id, final_message)
+                    await self.edit_message_with_keyboard(
+                        chat_id,
+                        progress_message_id,
+                        final_message,
+                        keyboard
+                    )
                 except Exception as e:
                     logger.warning(f"Не удалось отредактировать сообщение: {e}")
-                    await self.send_message(chat_id, final_message)
+                    await self.send_message_with_keyboard(chat_id, final_message, keyboard)
             else:
-                await self.send_message(chat_id, final_message)
+                await self.send_message_with_keyboard(chat_id, final_message, keyboard)
 
             # Сохраняем в базу
             try:
@@ -411,6 +368,104 @@ class AudioHandler(BaseHandler):
         except (sqlite3.Error, ValueError) as e:
             logger.error(f"Ошибка получения настроек пользователя {user_id}: {e}")
             return 30
+
+    async def summarize_audio_with_reasoning(self, text: str, target_ratio: float = 0.3) -> dict:
+        """
+        Суммаризация аудио текста с reasoning (объяснением хода мыслей).
+
+        Returns:
+            dict с ключами 'summary' и 'reasoning'
+        """
+        if not self.groq_client and not self.openrouter_client:
+            return {"summary": "❌ LLM API недоступен", "reasoning": ""}
+
+        try:
+            import re
+
+            # Нормализация текста
+            text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", text)
+            text = re.sub(r"\s+", " ", text)
+            text = text.strip()
+
+            if not text:
+                return {"summary": "❌ Текст пуст после нормализации", "reasoning": ""}
+
+            target_length = int(len(text) * target_ratio)
+
+            prompt = f"""Ты - эксперт по анализу голосовых сообщений. Создай развёрнутое саммари транскрипта голосового сообщения.
+
+**Текст транскрипта:**
+{text}
+
+**Требования к саммари:**
+- Развёрнутое и детальное (минимум {target_length} символов)
+- Сохрани ВСЕ ключевые моменты: даты, имена, цифры, решения, договорённости
+- Используй структурированный формат с секциями:
+  📌 **Главное** - основная суть в 1-2 предложениях
+  🔍 **Детали** - важные подробности в bullet points
+  ✅ **Выводы/Договорённости** - конкретные действия и решения (если есть)
+- Пиши естественным языком на том же языке, что и исходный текст
+- Если это диалог - отмечай ключевые реплики разных участников
+
+**ВАЖНО:** Также добавь секцию с твоим reasoning (рассуждением):
+
+🧠 **Reasoning:**
+Объясни, как ты анализировал этот текст:
+- Какую главную тему ты определил?
+- На какие ключевые моменты обратил внимание?
+- Какой контекст важен для понимания?
+- Какие детали можно опустить, а какие критичны?
+
+Ответь СТРОГО в формате JSON:
+{{
+  "summary": "Развёрнутое саммари со всеми секциями",
+  "reasoning": "Объяснение твоего хода мыслей при анализе"
+}}"""
+
+            # Пробуем Groq
+            if self.groq_client:
+                try:
+                    response = self.groq_client.chat.completions.create(
+                        messages=[{"role": "user", "content": prompt}],
+                        model="llama-3.3-70b-versatile",
+                        temperature=0.3,
+                        max_tokens=3000,
+                        response_format={"type": "json_object"}
+                    )
+                    if response.choices and response.choices[0].message:
+                        import json
+                        result = json.loads(response.choices[0].message.content)
+                        return {
+                            "summary": result.get("summary", "").strip(),
+                            "reasoning": result.get("reasoning", "").strip()
+                        }
+                except Exception as e:
+                    logger.warning(f"Groq API error: {e}")
+
+            # Fallback на OpenRouter (если есть)
+            if self.openrouter_client:
+                try:
+                    response = await self.openrouter_client.chat.completions.create(
+                        messages=[{"role": "user", "content": prompt}],
+                        model="deepseek/deepseek-chat-v3.1:free",
+                        temperature=0.3,
+                        max_tokens=3000,
+                    )
+                    if response.choices and response.choices[0].message:
+                        import json
+                        result = json.loads(response.choices[0].message.content)
+                        return {
+                            "summary": result.get("summary", "").strip(),
+                            "reasoning": result.get("reasoning", "").strip()
+                        }
+                except Exception as e:
+                    logger.error(f"OpenRouter API error: {e}")
+
+            return {"summary": "❌ Не удалось получить ответ от модели", "reasoning": ""}
+
+        except Exception as e:
+            logger.error(f"Ошибка при суммаризации: {e}")
+            return {"summary": f"❌ Ошибка: {str(e)[:100]}", "reasoning": ""}
 
     async def summarize_text(self, text: str, target_ratio: float = 0.3) -> str:
         """Суммаризация текста с помощью LLM API"""
@@ -499,3 +554,119 @@ class AudioHandler(BaseHandler):
             "задумчиво": "🤔"
         }
         return emotion_emojis.get(emotion.lower(), "")
+
+    async def send_message_with_keyboard(self, chat_id: int, text: str, keyboard: dict):
+        """Отправляет сообщение с inline клавиатурой"""
+        url = f"{self.base_url}/sendMessage"
+        data = {
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": keyboard,
+            "parse_mode": "Markdown"
+        }
+        async with self.session.post(url, json=data) as response:
+            return await response.json()
+
+    async def edit_message_with_keyboard(self, chat_id: int, message_id: int, text: str, keyboard: dict):
+        """Редактирует сообщение с inline клавиатурой"""
+        url = f"{self.base_url}/editMessageText"
+        data = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "reply_markup": keyboard,
+            "parse_mode": "Markdown"
+        }
+        async with self.session.post(url, json=data) as response:
+            return await response.json()
+
+    async def handle_audio_callback(self, callback_query: dict):
+        """Обработка callback запросов от кнопок аудио"""
+        data = callback_query.get("data", "")
+        message = callback_query.get("message", {})
+        chat_id = message.get("chat", {}).get("id")
+        message_id = message.get("message_id")
+
+        # Парсим callback data
+        if data.startswith("audio_transcript_"):
+            audio_msg_id = int(data.replace("audio_transcript_", ""))
+            await self._show_transcript(chat_id, message_id, audio_msg_id)
+        elif data.startswith("audio_reasoning_"):
+            audio_msg_id = int(data.replace("audio_reasoning_", ""))
+            await self._show_reasoning(chat_id, message_id, audio_msg_id)
+
+        # Отвечаем на callback чтобы убрать "часики"
+        await self.answer_callback_query(callback_query["id"])
+
+    async def _show_transcript(self, chat_id: int, message_id: int, audio_msg_id: int):
+        """Показывает транскрипт аудио с спикерами и эмоциями"""
+        if audio_msg_id not in self.audio_data_cache:
+            await self.send_message(chat_id, "❌ Данные не найдены. Возможно, они устарели.")
+            return
+
+        data = self.audio_data_cache[audio_msg_id]
+        transcript = data["transcript"]
+        segments = data["segments"]
+        speaker_data = data["speaker_emotion_data"]
+        duration = data["duration"]
+
+        from utils.tg_audio import format_duration
+        duration_text = f" ({format_duration(duration)})" if duration else ""
+
+        # Формируем сообщение с транскриптом
+        response = f"💬 **Транскрипт{duration_text}**\n\n"
+
+        if segments and speaker_data:
+            speaker_map = speaker_data.get("speaker_map", {})
+            emotion_map = speaker_data.get("emotion_map", {})
+
+            for i, seg in enumerate(segments):
+                speaker = speaker_map.get(i, "Спикер 1")
+                emotion = emotion_map.get(i, "")
+                emotion_emoji = self._get_emotion_emoji(emotion)
+                text = seg["text"].strip()
+                timestamp = self.audio_processor.format_timestamp(seg["start"])
+
+                if emotion and emotion != "нейтрально":
+                    response += f"[{timestamp}] {speaker} {emotion_emoji}: {text}\n"
+                else:
+                    response += f"[{timestamp}] {speaker}: {text}\n"
+
+                # Ограничиваем длину
+                if len(response) > 3800:
+                    response += f"\n... и ещё {len(segments) - i - 1} фраз"
+                    break
+        else:
+            # Показываем просто текст
+            response += transcript[:3800]
+            if len(transcript) > 3800:
+                response += "..."
+
+        await self.send_message(chat_id, response)
+
+    async def _show_reasoning(self, chat_id: int, message_id: int, audio_msg_id: int):
+        """Показывает reasoning (объяснение хода мыслей LLM)"""
+        if audio_msg_id not in self.audio_data_cache:
+            await self.send_message(chat_id, "❌ Данные не найдены. Возможно, они устарели.")
+            return
+
+        data = self.audio_data_cache[audio_msg_id]
+        reasoning = data["reasoning"]
+
+        if reasoning:
+            response = f"🧠 **Reasoning (ход мыслей при анализе):**\n\n{reasoning}"
+            # Ограничиваем длину
+            if len(response) > 4000:
+                response = response[:4000] + "..."
+            await self.send_message(chat_id, response)
+        else:
+            await self.send_message(chat_id, "❌ Reasoning недоступен для этого аудио.")
+
+    async def answer_callback_query(self, callback_query_id: str, text: str = ""):
+        """Отвечает на callback query"""
+        url = f"{self.base_url}/answerCallbackQuery"
+        data = {"callback_query_id": callback_query_id}
+        if text:
+            data["text"] = text
+        async with self.session.post(url, json=data) as response:
+            return await response.json()

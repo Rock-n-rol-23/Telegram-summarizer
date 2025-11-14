@@ -188,13 +188,14 @@ class RefactoredBot:
             db_executor=self.executor,
         )
 
-        # CallbackHandler (передаем text_handler для пересоздания саммари)
+        # CallbackHandler (передаем text_handler и audio_handler)
         self.callback_handler = CallbackHandler(
             session=self.session,
             base_url=self.base_url,
             db=self.db,
             state_manager=self.state_manager,
             text_handler=self.text_handler,
+            audio_handler=self.audio_handler,
         )
 
         # ChoiceHandler (для диалога выбора между фото и ссылкой)
