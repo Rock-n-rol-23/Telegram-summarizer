@@ -1,12 +1,11 @@
 """
 LLM Provider Router - Manages multiple LLM providers with fallback support
-Supports Google Gemini (primary), OpenRouter (secondary) and optional Groq fallback
+Simplified version: Google Gemini (primary) → Groq (fallback)
 """
 
 import logging
 import time
 from typing import Optional, Tuple, Dict, Any
-import openai
 from groq import Groq
 from config import config
 
@@ -21,14 +20,13 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 class LLMProviderRouter:
-    """Routes LLM requests through multiple providers with fallback support"""
+    """Routes LLM requests through Gemini and Groq with fallback support"""
 
     def __init__(self):
         self.gemini_client = None
-        self.openrouter_client = None
         self.groq_client = None
         self.current_model = None
-        self.current_provider = None  # 'gemini', 'openrouter', 'groq'
+        self.current_provider = None  # 'gemini' or 'groq'
         self.retry_count = 0
         self.max_retries = 2
 
@@ -46,50 +44,23 @@ class LLMProviderRouter:
                 logger.warning(f"⚠️ Gemini initialization failed: {e}")
                 self.gemini_client = None
 
-        # OpenRouter client setup (secondary)
-        if config.OPENROUTER_API_KEY:
-            self.openrouter_client = openai.OpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key=config.OPENROUTER_API_KEY,
-                default_headers={
-                    "HTTP-Referer": "https://telegram-summarizer.com",
-                    "X-Title": "Telegram Summarizer Bot"
-                }
-            )
-            logger.info("✅ OpenRouter client initialized")
-
-        # Optional Groq fallback
-        if config.ENABLE_GROQ_FALLBACK and config.GROQ_API_KEY:
+        # Groq fallback
+        if config.GROQ_API_KEY:
             self.groq_client = Groq(api_key=config.GROQ_API_KEY)
-            logger.info("✅ Groq fallback client initialized")
+            logger.info(f"✅ Groq fallback client initialized: {config.GROQ_LLM_MODEL}")
     
-    def get_llm_client_and_model(self) -> Tuple[Any, str]:
+    def get_llm_client_and_model(self) -> Tuple[Any, str, str]:
         """
         Get the appropriate LLM client and model
         Returns: (client, model_name, provider)
         """
-        # Primary: OpenRouter with Kimi K2 (256K context, free)
-        if config.USE_OPENROUTER_PRIMARY and self.openrouter_client and config.OPENROUTER_PRIMARY_MODEL:
-            self.current_provider = 'openrouter'
-            return self.openrouter_client, config.OPENROUTER_PRIMARY_MODEL, 'openrouter'
-
-        # Secondary: OpenRouter with DeepSeek V3 (fallback)
-        if self.openrouter_client and config.OPENROUTER_SECONDARY_MODEL:
-            self.current_provider = 'openrouter'
-            return self.openrouter_client, config.OPENROUTER_SECONDARY_MODEL, 'openrouter'
-
-        # Tertiary: OpenRouter with Qwen 2.5 (fallback)
-        if self.openrouter_client and hasattr(config, 'OPENROUTER_TERTIARY_MODEL') and config.OPENROUTER_TERTIARY_MODEL:
-            self.current_provider = 'openrouter'
-            return self.openrouter_client, config.OPENROUTER_TERTIARY_MODEL, 'openrouter'
-
-        # Quaternary: Google Gemini (vision/multimodal primarily)
-        if config.USE_GEMINI_PRIMARY and self.gemini_client:
+        # Primary: Google Gemini 2.5 Flash (free, fast, 2M context, excellent Russian)
+        if self.gemini_client:
             self.current_provider = 'gemini'
             return self.gemini_client, config.GEMINI_MODEL, 'gemini'
 
-        # Final fallback: Groq
-        if config.ENABLE_GROQ_FALLBACK and self.groq_client and config.GROQ_LLM_MODEL:
+        # Fallback: Groq with Llama 3.3 70B
+        if self.groq_client and config.GROQ_LLM_MODEL:
             self.current_provider = 'groq'
             return self.groq_client, config.GROQ_LLM_MODEL, 'groq'
 
@@ -107,40 +78,14 @@ class LLMProviderRouter:
         return False
     
     def _switch_to_fallback(self) -> Tuple[Any, str, str]:
-        """Switch to fallback provider"""
+        """Switch to fallback provider (Gemini → Groq)"""
         logger.info("🔄 Switching to fallback provider")
-
-        # If Kimi K2 (primary) failed, try DeepSeek V3 (secondary)
-        if self.current_provider == 'openrouter' and self.current_model == config.OPENROUTER_PRIMARY_MODEL:
-            if self.openrouter_client and config.OPENROUTER_SECONDARY_MODEL:
-                logger.info("🔄 Switching from Kimi K2 to DeepSeek V3")
-                return self.openrouter_client, config.OPENROUTER_SECONDARY_MODEL, 'openrouter'
-
-        # If DeepSeek V3 (secondary) failed, try Qwen 2.5 (tertiary)
-        if self.current_provider == 'openrouter' and self.current_model == config.OPENROUTER_SECONDARY_MODEL:
-            if self.openrouter_client and hasattr(config, 'OPENROUTER_TERTIARY_MODEL') and config.OPENROUTER_TERTIARY_MODEL:
-                logger.info("🔄 Switching from DeepSeek V3 to Qwen 2.5")
-                return self.openrouter_client, config.OPENROUTER_TERTIARY_MODEL, 'openrouter'
-
-        # If Qwen 2.5 failed, try Gemini
-        if self.current_provider == 'openrouter' and self.current_model == getattr(config, 'OPENROUTER_TERTIARY_MODEL', None):
-            if self.gemini_client and config.GEMINI_MODEL:
-                self.current_provider = 'gemini'
-                logger.info("🔄 Switching from Qwen 2.5 to Gemini")
-                return self.gemini_client, config.GEMINI_MODEL, 'gemini'
 
         # If Gemini failed, try Groq
         if self.current_provider == 'gemini':
-            if config.ENABLE_GROQ_FALLBACK and self.groq_client and config.GROQ_LLM_MODEL:
+            if self.groq_client and config.GROQ_LLM_MODEL:
                 self.current_provider = 'groq'
-                logger.info("🔄 Switching from Gemini to Groq")
-                return self.groq_client, config.GROQ_LLM_MODEL, 'groq'
-
-        # If all OpenRouter models failed, try Groq directly
-        if self.current_provider == 'openrouter':
-            if config.ENABLE_GROQ_FALLBACK and self.groq_client and config.GROQ_LLM_MODEL:
-                self.current_provider = 'groq'
-                logger.info("🔄 Switching from OpenRouter to Groq")
+                logger.info(f"🔄 Switching from Gemini to Groq ({config.GROQ_LLM_MODEL})")
                 return self.groq_client, config.GROQ_LLM_MODEL, 'groq'
 
         raise ValueError("Все провайдеры недоступны")
