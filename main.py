@@ -50,24 +50,13 @@ async def main():
         except Exception as e:
             logger.warning(f"⚠️  Не удалось инициализировать Groq: {e}")
 
-    # Инициализация OpenRouter клиента (если доступен)
+    # OpenRouter больше не используется (только Gemini + Groq)
     openrouter_client = None
-    if config.OPENROUTER_API_KEY:
-        try:
-            from openai import AsyncOpenAI
-            openrouter_client = AsyncOpenAI(
-                api_key=config.OPENROUTER_API_KEY,
-                base_url="https://openrouter.ai/api/v1"
-            )
-            logger.info("✅ OpenRouter клиент инициализирован")
-        except Exception as e:
-            logger.warning(f"⚠️  Не удалось инициализировать OpenRouter: {e}")
 
     # Проверка наличия хотя бы одного LLM клиента
-    if not groq_client and not openrouter_client:
-        logger.error("❌ Не инициализирован ни один LLM клиент (Groq/OpenRouter)")
-        logger.error("❌ Установите GROQ_API_KEY или OPENROUTER_API_KEY в .env")
-        return
+    if not groq_client:
+        logger.warning("⚠️  Groq клиент не инициализирован")
+        logger.warning("⚠️  Убедитесь, что GROQ_API_KEY или GEMINI_API_KEY установлены в .env")
 
     # Инициализация процессоров
     logger.info("Инициализация процессоров...")
