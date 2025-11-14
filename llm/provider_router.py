@@ -68,21 +68,27 @@ class LLMProviderRouter:
         Get the appropriate LLM client and model
         Returns: (client, model_name, provider)
         """
-        # Primary: Google Gemini (free and fast)
-        if config.USE_GEMINI_PRIMARY and self.gemini_client:
-            self.current_provider = 'gemini'
-            return self.gemini_client, config.GEMINI_MODEL, 'gemini'
-
-        # Secondary: OpenRouter with free models
+        # Primary: OpenRouter with Kimi K2 (256K context, free)
         if config.USE_OPENROUTER_PRIMARY and self.openrouter_client and config.OPENROUTER_PRIMARY_MODEL:
             self.current_provider = 'openrouter'
             return self.openrouter_client, config.OPENROUTER_PRIMARY_MODEL, 'openrouter'
 
+        # Secondary: OpenRouter with DeepSeek V3 (fallback)
         if self.openrouter_client and config.OPENROUTER_SECONDARY_MODEL:
             self.current_provider = 'openrouter'
             return self.openrouter_client, config.OPENROUTER_SECONDARY_MODEL, 'openrouter'
 
-        # Tertiary fallback: Groq
+        # Tertiary: OpenRouter with Qwen 2.5 (fallback)
+        if self.openrouter_client and hasattr(config, 'OPENROUTER_TERTIARY_MODEL') and config.OPENROUTER_TERTIARY_MODEL:
+            self.current_provider = 'openrouter'
+            return self.openrouter_client, config.OPENROUTER_TERTIARY_MODEL, 'openrouter'
+
+        # Quaternary: Google Gemini (vision/multimodal primarily)
+        if config.USE_GEMINI_PRIMARY and self.gemini_client:
+            self.current_provider = 'gemini'
+            return self.gemini_client, config.GEMINI_MODEL, 'gemini'
+
+        # Final fallback: Groq
         if config.ENABLE_GROQ_FALLBACK and self.groq_client and config.GROQ_LLM_MODEL:
             self.current_provider = 'groq'
             return self.groq_client, config.GROQ_LLM_MODEL, 'groq'
@@ -104,21 +110,37 @@ class LLMProviderRouter:
         """Switch to fallback provider"""
         logger.info("🔄 Switching to fallback provider")
 
-        # If Gemini failed, try OpenRouter
-        if self.current_provider == 'gemini':
-            if self.openrouter_client and config.OPENROUTER_PRIMARY_MODEL:
-                self.current_provider = 'openrouter'
-                return self.openrouter_client, config.OPENROUTER_PRIMARY_MODEL, 'openrouter'
-
-        # If primary OpenRouter failed, try secondary
+        # If Kimi K2 (primary) failed, try DeepSeek V3 (secondary)
         if self.current_provider == 'openrouter' and self.current_model == config.OPENROUTER_PRIMARY_MODEL:
             if self.openrouter_client and config.OPENROUTER_SECONDARY_MODEL:
+                logger.info("🔄 Switching from Kimi K2 to DeepSeek V3")
                 return self.openrouter_client, config.OPENROUTER_SECONDARY_MODEL, 'openrouter'
 
-        # If OpenRouter failed, try Groq
-        if self.current_provider in ['gemini', 'openrouter']:
+        # If DeepSeek V3 (secondary) failed, try Qwen 2.5 (tertiary)
+        if self.current_provider == 'openrouter' and self.current_model == config.OPENROUTER_SECONDARY_MODEL:
+            if self.openrouter_client and hasattr(config, 'OPENROUTER_TERTIARY_MODEL') and config.OPENROUTER_TERTIARY_MODEL:
+                logger.info("🔄 Switching from DeepSeek V3 to Qwen 2.5")
+                return self.openrouter_client, config.OPENROUTER_TERTIARY_MODEL, 'openrouter'
+
+        # If Qwen 2.5 failed, try Gemini
+        if self.current_provider == 'openrouter' and self.current_model == getattr(config, 'OPENROUTER_TERTIARY_MODEL', None):
+            if self.gemini_client and config.GEMINI_MODEL:
+                self.current_provider = 'gemini'
+                logger.info("🔄 Switching from Qwen 2.5 to Gemini")
+                return self.gemini_client, config.GEMINI_MODEL, 'gemini'
+
+        # If Gemini failed, try Groq
+        if self.current_provider == 'gemini':
             if config.ENABLE_GROQ_FALLBACK and self.groq_client and config.GROQ_LLM_MODEL:
                 self.current_provider = 'groq'
+                logger.info("🔄 Switching from Gemini to Groq")
+                return self.groq_client, config.GROQ_LLM_MODEL, 'groq'
+
+        # If all OpenRouter models failed, try Groq directly
+        if self.current_provider == 'openrouter':
+            if config.ENABLE_GROQ_FALLBACK and self.groq_client and config.GROQ_LLM_MODEL:
+                self.current_provider = 'groq'
+                logger.info("🔄 Switching from OpenRouter to Groq")
                 return self.groq_client, config.GROQ_LLM_MODEL, 'groq'
 
         raise ValueError("Все провайдеры недоступны")
@@ -246,7 +268,7 @@ class LLMProviderRouter:
                      temperature: float = 0.3,
                      max_tokens: int = 2000) -> str:
         """
-        Analyze image using Gemini Vision or fallback to OCR + text analysis
+        Analyze image using Gemini Vision 2.5 or fallback to OCR + text analysis
 
         Args:
             image_data: Binary image data
@@ -257,10 +279,12 @@ class LLMProviderRouter:
         Returns:
             Analysis result text
         """
-        # Try Gemini Vision first
+        # Try Gemini Vision 2.5 Flash first
         if GEMINI_AVAILABLE and self.gemini_client:
             try:
-                logger.info("🖼️ Analyzing image with Gemini Vision")
+                # Use dedicated vision model
+                vision_model_name = getattr(config, 'GEMINI_VISION_MODEL', config.GEMINI_MODEL)
+                logger.info(f"🖼️ Analyzing image with Gemini Vision: {vision_model_name}")
 
                 # Gemini Vision requires PIL Image
                 from PIL import Image
@@ -268,18 +292,24 @@ class LLMProviderRouter:
 
                 image = Image.open(io.BytesIO(image_data))
 
+                # Create vision model instance
+                if vision_model_name != config.GEMINI_MODEL:
+                    vision_client = genai.GenerativeModel(vision_model_name)
+                else:
+                    vision_client = self.gemini_client
+
                 generation_config = {
                     "temperature": temperature,
                     "max_output_tokens": max_tokens,
                 }
 
-                response = self.gemini_client.generate_content(
+                response = vision_client.generate_content(
                     [prompt, image],
                     generation_config=generation_config
                 )
 
                 result = response.text
-                logger.info("✅ Successfully analyzed image with Gemini Vision")
+                logger.info(f"✅ Successfully analyzed image with {vision_model_name}")
                 return result
 
             except Exception as e:

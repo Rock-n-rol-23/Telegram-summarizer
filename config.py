@@ -18,16 +18,18 @@ class Config:
             raise ValueError("TELEGRAM_BOT_TOKEN не найден в переменных окружения")
         
         # LLM Configuration (free-first approach)
-        # Primary: Google Gemini (free, multimodal)
-        self.GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
-        self.USE_GEMINI_PRIMARY = os.getenv('USE_GEMINI_PRIMARY', 'true').lower() == 'true'
-        self.GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash-exp')
-
-        # Secondary: OpenRouter (free models)
+        # Primary: Kimi K2 via OpenRouter (free, 256K context, best for long documents)
         self.OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '')
-        self.USE_OPENROUTER_PRIMARY = os.getenv('USE_OPENROUTER_PRIMARY', 'false').lower() == 'true'
-        self.OPENROUTER_PRIMARY_MODEL = os.getenv('OPENROUTER_PRIMARY_MODEL', 'deepseek/deepseek-chat-v3.1:free')
-        self.OPENROUTER_SECONDARY_MODEL = os.getenv('OPENROUTER_SECONDARY_MODEL', 'qwen/qwen-2.5-72b-instruct:free')
+        self.USE_OPENROUTER_PRIMARY = os.getenv('USE_OPENROUTER_PRIMARY', 'true').lower() == 'true'
+        self.OPENROUTER_PRIMARY_MODEL = os.getenv('OPENROUTER_PRIMARY_MODEL', 'moonshotai/kimi-k2:free')
+        self.OPENROUTER_SECONDARY_MODEL = os.getenv('OPENROUTER_SECONDARY_MODEL', 'deepseek/deepseek-chat-v3.1:free')
+        self.OPENROUTER_TERTIARY_MODEL = os.getenv('OPENROUTER_TERTIARY_MODEL', 'qwen/qwen-2.5-72b-instruct:free')
+
+        # Secondary: Google Gemini (for vision/multimodal tasks only)
+        self.GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+        self.USE_GEMINI_PRIMARY = os.getenv('USE_GEMINI_PRIMARY', 'false').lower() == 'true'
+        self.GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
+        self.GEMINI_VISION_MODEL = os.getenv('GEMINI_VISION_MODEL', 'gemini-2.5-flash')
 
         # Tertiary: Groq (fast fallback with Llama 3.1 405B)
         self.GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
@@ -156,11 +158,14 @@ class Config:
 
         # Проверяем наличие хотя бы одного LLM провайдера
         has_provider = False
-        if self.GEMINI_API_KEY:
-            print("✅ Gemini API Key найден (основной провайдер)")
-            has_provider = True
         if self.OPENROUTER_API_KEY:
-            print("✅ OpenRouter API Key найден (резервный провайдер)")
+            print("✅ OpenRouter API Key найден (основной провайдер)")
+            print(f"   → Primary: {self.OPENROUTER_PRIMARY_MODEL} (Kimi K2)")
+            print(f"   → Secondary: {self.OPENROUTER_SECONDARY_MODEL} (DeepSeek V3)")
+            print(f"   → Tertiary: {self.OPENROUTER_TERTIARY_MODEL} (Qwen 2.5)")
+            has_provider = True
+        if self.GEMINI_API_KEY:
+            print(f"✅ Gemini API Key найден (vision/multimodal: {self.GEMINI_VISION_MODEL})")
             has_provider = True
         if self.GROQ_API_KEY:
             print("✅ Groq API Key найден (fallback с Llama 3.1 405B)")
@@ -168,7 +173,7 @@ class Config:
 
         if not has_provider:
             print("⚠️  ВНИМАНИЕ: Ни один LLM провайдер не настроен!")
-            print("   Установите хотя бы один из: GEMINI_API_KEY, OPENROUTER_API_KEY, GROQ_API_KEY")
+            print("   Установите хотя бы один из: OPENROUTER_API_KEY, GEMINI_API_KEY, GROQ_API_KEY")
 
         if self.MAX_REQUESTS_PER_MINUTE <= 0:
             raise ValueError("MAX_REQUESTS_PER_MINUTE должен быть больше 0")

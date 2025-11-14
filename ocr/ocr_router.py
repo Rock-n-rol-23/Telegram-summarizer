@@ -31,21 +31,38 @@ except ImportError:
     PADDLEOCR_AVAILABLE = False
     PaddleOCR = None
 
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    EASYOCR_AVAILABLE = False
+    easyocr = None
+
 from config import config
 
 logger = logging.getLogger(__name__)
 
 class OCRRouter:
     """Routes OCR requests through multiple engines for best results"""
-    
+
     def __init__(self):
         self.paddle_ocr_ru = None
         self.paddle_ocr_en = None
-        
+        self.easyocr_reader = None
+
         self._initialize_engines()
     
     def _initialize_engines(self):
         """Initialize available OCR engines"""
+        # Initialize EasyOCR if available (primary for fallback)
+        if EASYOCR_AVAILABLE:
+            try:
+                # Initialize with Russian and English languages
+                self.easyocr_reader = easyocr.Reader(['ru', 'en'], gpu=False)
+                logger.info("✅ EasyOCR initialized for RU/EN (fallback for Gemini Vision)")
+            except Exception as e:
+                logger.error(f"Failed to initialize EasyOCR: {e}")
+
         # Initialize PaddleOCR if available and enabled
         if PADDLEOCR_AVAILABLE and config.OCR_USE_PADDLE:
             try:
@@ -54,7 +71,7 @@ class OCRRouter:
                 logger.info("PaddleOCR initialized for RU/EN")
             except Exception as e:
                 logger.error(f"Failed to initialize PaddleOCR: {e}")
-        
+
         # Check Tesseract availability
         if TESSERACT_AVAILABLE and config.OCR_USE_TESSERACT:
             try:
@@ -92,25 +109,26 @@ class OCRRouter:
     def extract_text_from_image(self, image_path: str, language: str = 'ru+en') -> str:
         """
         Extract text from image using best available OCR
-        
+
         Args:
             image_path: Path to image file
             language: Language for OCR
-            
+
         Returns:
             Extracted text
         """
         results = []
-        
-        # Try Tesseract if available
-        if TESSERACT_AVAILABLE and config.OCR_USE_TESSERACT:
+
+        # Try EasyOCR first (best quality, fallback for Gemini Vision)
+        if EASYOCR_AVAILABLE and self.easyocr_reader:
             try:
-                tesseract_result = self._extract_with_tesseract(image_path, language)
-                if tesseract_result:
-                    results.append(('tesseract', tesseract_result))
+                easyocr_result = self._extract_with_easyocr(image_path)
+                if easyocr_result:
+                    results.append(('easyocr', easyocr_result))
+                    logger.info("✅ EasyOCR успешно извлек текст")
             except Exception as e:
-                logger.error(f"Tesseract failed: {e}")
-        
+                logger.error(f"EasyOCR failed: {e}")
+
         # Try PaddleOCR if available
         if PADDLEOCR_AVAILABLE and config.OCR_USE_PADDLE:
             try:
@@ -119,10 +137,19 @@ class OCRRouter:
                     results.append(('paddle', paddle_result))
             except Exception as e:
                 logger.error(f"PaddleOCR failed: {e}")
-        
+
+        # Try Tesseract as last resort
+        if TESSERACT_AVAILABLE and config.OCR_USE_TESSERACT:
+            try:
+                tesseract_result = self._extract_with_tesseract(image_path, language)
+                if tesseract_result:
+                    results.append(('tesseract', tesseract_result))
+            except Exception as e:
+                logger.error(f"Tesseract failed: {e}")
+
         if not results:
             raise Exception("Не удалось извлечь текст из изображения")
-        
+
         # Return the best result
         return self._select_best_result(results)
     
@@ -213,27 +240,55 @@ class OCRRouter:
             else:
                 # Fallback to Russian model
                 ocr = self.paddle_ocr_ru or self.paddle_ocr_en
-            
+
             if not ocr:
                 return ""
-            
+
             result = ocr.ocr(image_path, cls=True)
-            
+
             if not result or not result[0]:
                 return ""
-            
+
             # Extract text from result
             text_parts = []
             for line in result[0]:
                 if line and len(line) > 1:
                     text_parts.append(line[1][0])
-            
+
             return " ".join(text_parts)
-            
+
         except Exception as e:
             logger.error(f"PaddleOCR extraction failed: {e}")
             return ""
-    
+
+    def _extract_with_easyocr(self, image_path: str) -> str:
+        """Extract text using EasyOCR (primary fallback for Gemini Vision)"""
+        try:
+            if not self.easyocr_reader:
+                return ""
+
+            # EasyOCR returns list of (bbox, text, confidence)
+            results = self.easyocr_reader.readtext(image_path)
+
+            if not results:
+                return ""
+
+            # Extract text from results
+            text_parts = []
+            for (bbox, text, confidence) in results:
+                # Only include text with confidence > 0.3
+                if confidence > 0.3:
+                    text_parts.append(text)
+
+            extracted_text = " ".join(text_parts)
+            logger.info(f"EasyOCR extracted {len(text_parts)} text blocks")
+
+            return extracted_text
+
+        except Exception as e:
+            logger.error(f"EasyOCR extraction failed: {e}")
+            return ""
+
     def _is_good_text(self, text: str) -> bool:
         """Check if extracted text is good enough"""
         if not text or len(text.strip()) < 50:
@@ -297,14 +352,20 @@ class OCRRouter:
         """Check if any OCR engine is available"""
         return (
             PYMUPDF_AVAILABLE or
+            EASYOCR_AVAILABLE or
             (TESSERACT_AVAILABLE and config.OCR_USE_TESSERACT) or
             (PADDLEOCR_AVAILABLE and config.OCR_USE_PADDLE)
         )
-    
+
     def get_engine_info(self) -> Dict:
         """Get info about available OCR engines"""
         return {
             'pymupdf': {'available': PYMUPDF_AVAILABLE},
+            'easyocr': {
+                'available': EASYOCR_AVAILABLE,
+                'enabled': True,  # Always enabled if available (primary fallback)
+                'initialized': self.easyocr_reader is not None
+            },
             'tesseract': {
                 'available': TESSERACT_AVAILABLE,
                 'enabled': config.OCR_USE_TESSERACT
