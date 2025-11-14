@@ -68,25 +68,25 @@ class LLMProviderRouter:
         Get the appropriate LLM client and model
         Returns: (client, model_name, provider)
         """
-        # Primary: OpenRouter with Kimi K2 (256K context, free)
+        # Primary: Google Gemini 2.5 Flash (free, fast, 2M context)
+        if config.USE_GEMINI_PRIMARY and self.gemini_client:
+            self.current_provider = 'gemini'
+            return self.gemini_client, config.GEMINI_MODEL, 'gemini'
+
+        # Secondary: OpenRouter with Kimi K2 (256K context)
         if config.USE_OPENROUTER_PRIMARY and self.openrouter_client and config.OPENROUTER_PRIMARY_MODEL:
             self.current_provider = 'openrouter'
             return self.openrouter_client, config.OPENROUTER_PRIMARY_MODEL, 'openrouter'
 
-        # Secondary: OpenRouter with DeepSeek V3 (fallback)
+        # Tertiary: OpenRouter with DeepSeek V3 (fallback)
         if self.openrouter_client and config.OPENROUTER_SECONDARY_MODEL:
             self.current_provider = 'openrouter'
             return self.openrouter_client, config.OPENROUTER_SECONDARY_MODEL, 'openrouter'
 
-        # Tertiary: OpenRouter with Qwen 2.5 (fallback)
+        # Quaternary: OpenRouter with Qwen 2.5 (fallback)
         if self.openrouter_client and hasattr(config, 'OPENROUTER_TERTIARY_MODEL') and config.OPENROUTER_TERTIARY_MODEL:
             self.current_provider = 'openrouter'
             return self.openrouter_client, config.OPENROUTER_TERTIARY_MODEL, 'openrouter'
-
-        # Quaternary: Google Gemini (vision/multimodal primarily)
-        if config.USE_GEMINI_PRIMARY and self.gemini_client:
-            self.current_provider = 'gemini'
-            return self.gemini_client, config.GEMINI_MODEL, 'gemini'
 
         # Final fallback: Groq
         if config.ENABLE_GROQ_FALLBACK and self.groq_client and config.GROQ_LLM_MODEL:
@@ -110,33 +110,33 @@ class LLMProviderRouter:
         """Switch to fallback provider"""
         logger.info("🔄 Switching to fallback provider")
 
-        # If Kimi K2 (primary) failed, try DeepSeek V3 (secondary)
+        # If Gemini (primary) failed, try OpenRouter Kimi K2
+        if self.current_provider == 'gemini':
+            if self.openrouter_client and config.OPENROUTER_PRIMARY_MODEL:
+                self.current_provider = 'openrouter'
+                logger.info("🔄 Switching from Gemini to Kimi K2")
+                return self.openrouter_client, config.OPENROUTER_PRIMARY_MODEL, 'openrouter'
+
+        # If Kimi K2 failed, try DeepSeek V3
         if self.current_provider == 'openrouter' and self.current_model == config.OPENROUTER_PRIMARY_MODEL:
             if self.openrouter_client and config.OPENROUTER_SECONDARY_MODEL:
                 logger.info("🔄 Switching from Kimi K2 to DeepSeek V3")
                 return self.openrouter_client, config.OPENROUTER_SECONDARY_MODEL, 'openrouter'
 
-        # If DeepSeek V3 (secondary) failed, try Qwen 2.5 (tertiary)
+        # If DeepSeek V3 failed, try Qwen 2.5
         if self.current_provider == 'openrouter' and self.current_model == config.OPENROUTER_SECONDARY_MODEL:
             if self.openrouter_client and hasattr(config, 'OPENROUTER_TERTIARY_MODEL') and config.OPENROUTER_TERTIARY_MODEL:
                 logger.info("🔄 Switching from DeepSeek V3 to Qwen 2.5")
                 return self.openrouter_client, config.OPENROUTER_TERTIARY_MODEL, 'openrouter'
 
-        # If Qwen 2.5 failed, try Gemini
+        # If Qwen 2.5 failed, try Groq
         if self.current_provider == 'openrouter' and self.current_model == getattr(config, 'OPENROUTER_TERTIARY_MODEL', None):
-            if self.gemini_client and config.GEMINI_MODEL:
-                self.current_provider = 'gemini'
-                logger.info("🔄 Switching from Qwen 2.5 to Gemini")
-                return self.gemini_client, config.GEMINI_MODEL, 'gemini'
-
-        # If Gemini failed, try Groq
-        if self.current_provider == 'gemini':
             if config.ENABLE_GROQ_FALLBACK and self.groq_client and config.GROQ_LLM_MODEL:
                 self.current_provider = 'groq'
-                logger.info("🔄 Switching from Gemini to Groq")
+                logger.info("🔄 Switching from Qwen 2.5 to Groq")
                 return self.groq_client, config.GROQ_LLM_MODEL, 'groq'
 
-        # If all OpenRouter models failed, try Groq directly
+        # If any OpenRouter model failed, try Groq as final fallback
         if self.current_provider == 'openrouter':
             if config.ENABLE_GROQ_FALLBACK and self.groq_client and config.GROQ_LLM_MODEL:
                 self.current_provider = 'groq'
