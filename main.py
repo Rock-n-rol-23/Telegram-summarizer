@@ -42,7 +42,7 @@ async def main():
 
     # Инициализация Groq клиента (если доступен)
     groq_client = None
-    if config.GROQ_API_KEY and config.ENABLE_GROQ_FALLBACK:
+    if config.GROQ_API_KEY:
         try:
             from groq import Groq
             groq_client = Groq(api_key=config.GROQ_API_KEY)
