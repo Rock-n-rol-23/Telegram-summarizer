@@ -190,6 +190,8 @@ class AudioHandler(BaseHandler):
 
             transcript = result["transcript"]
             duration = result.get("duration_sec")
+            segments = result.get("segments", [])
+            speaker_emotion_data = result.get("speaker_emotion_data")
 
             # Проверяем длину транскрипта
             if not transcript or len(transcript.strip()) < 10:
@@ -243,19 +245,82 @@ class AudioHandler(BaseHandler):
                     + ("..." if len(transcript) > 1000 else "")
                 )
 
-            # Формируем финальный ответ
+            # Формируем финальный ответ с улучшениями
             duration_text = f" ({format_duration(duration)})" if duration else ""
-            final_message = f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n{summary}"
 
-            # Ограничиваем длину сообщения
+            # Заголовок
+            final_message = f"🎧 {audio_info}{duration_text}\n\n"
+
+            # Информация о спикерах
+            if speaker_emotion_data and speaker_emotion_data.get("num_speakers", 1) > 1:
+                num_speakers = speaker_emotion_data["num_speakers"]
+                final_message += f"👥 Обнаружено спикеров: {num_speakers}\n\n"
+
+            # Саммари
+            final_message += f"📋 **Саммари:**\n{summary}\n\n"
+
+            # Таймлайн (для длинных аудио > 2 минут)
+            if duration and duration > 120 and segments and len(segments) > 3:
+                final_message += "⏱️ **Таймлайн:**\n"
+                # Группируем сегменты в блоки по ~30-60 секунд
+                timeline_entries = []
+                current_block = []
+                block_start_time = 0
+
+                for i, seg in enumerate(segments):
+                    if not current_block:
+                        block_start_time = seg["start"]
+                    current_block.append(seg["text"].strip())
+
+                    # Создаем блок каждые 30-60 секунд или последний сегмент
+                    if (seg["end"] - block_start_time > 45) or (i == len(segments) - 1):
+                        timestamp = self.audio_processor.format_timestamp(block_start_time)
+                        block_text = " ".join(current_block)
+                        # Берем первые 60 символов как краткое описание
+                        block_summary = block_text[:60] + "..." if len(block_text) > 60 else block_text
+                        timeline_entries.append(f"• {timestamp} - {block_summary}")
+                        current_block = []
+
+                # Показываем до 8 записей таймлайна
+                final_message += "\n".join(timeline_entries[:8])
+                if len(timeline_entries) > 8:
+                    final_message += f"\n... и ещё {len(timeline_entries) - 8} временных меток"
+                final_message += "\n\n"
+
+            # Транскрипт с спикерами и эмоциями (для коротких аудио < 2 минут или если есть несколько спикеров)
+            show_detailed_transcript = False
+            if speaker_emotion_data and speaker_emotion_data.get("num_speakers", 1) > 1:
+                show_detailed_transcript = True
+            elif duration and duration < 120:
+                show_detailed_transcript = True
+
+            if show_detailed_transcript and segments and speaker_emotion_data:
+                final_message += "💬 **Транскрипт:**\n"
+                speaker_map = speaker_emotion_data.get("speaker_map", {})
+                emotion_map = speaker_emotion_data.get("emotion_map", {})
+
+                for i, seg in enumerate(segments[:15]):  # Показываем до 15 сегментов
+                    speaker = speaker_map.get(i, "Спикер 1")
+                    emotion = emotion_map.get(i, "")
+                    emotion_emoji = self._get_emotion_emoji(emotion)
+                    text = seg["text"].strip()
+
+                    if emotion and emotion != "нейтрально":
+                        final_message += f"{speaker} {emotion_emoji}: {text}\n"
+                    else:
+                        final_message += f"{speaker}: {text}\n"
+
+                if len(segments) > 15:
+                    final_message += f"... и ещё {len(segments) - 15} фраз\n"
+
+            # Ограничиваем длину сообщения (Telegram лимит 4096)
             if len(final_message) > 4000:
-                summary_limit = (
-                    4000 - len(f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n") - 50
-                )
-                summary = summary[:summary_limit] + "..."
-                final_message = (
-                    f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n{summary}"
-                )
+                # Урезаем до базового формата
+                final_message = f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n{summary}"
+                if len(final_message) > 4000:
+                    summary_limit = 4000 - len(f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n") - 50
+                    summary = summary[:summary_limit] + "..."
+                    final_message = f"🎧 {audio_info}{duration_text}\n\n📋 **Саммари:**\n{summary}"
 
             # Отправляем результат
             if progress_message_id and isinstance(progress_message_id, int):
@@ -418,3 +483,19 @@ class AudioHandler(BaseHandler):
 
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(self.db_executor, func, *args)
+
+    def _get_emotion_emoji(self, emotion: str) -> str:
+        """Возвращает эмодзи для эмоции"""
+        emotion_emojis = {
+            "радостно": "😊",
+            "взволнованно": "😰",
+            "серьезно": "😐",
+            "напряженно": "😬",
+            "спокойно": "😌",
+            "нейтрально": "",
+            "удивленно": "😲",
+            "грустно": "😔",
+            "сердито": "😠",
+            "задумчиво": "🤔"
+        }
+        return emotion_emojis.get(emotion.lower(), "")

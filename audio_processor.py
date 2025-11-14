@@ -38,6 +38,88 @@ class AudioProcessor:
         self.groq = groq_client
         self.max_mb = max_file_size_mb
 
+    def format_timestamp(self, seconds: float) -> str:
+        """Форматирует секунды в MM:SS или HH:MM:SS"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}:{secs:02d}"
+
+    async def detect_speakers_and_emotions(self, segments: List[Dict[str, Any]], language: str = "ru") -> Dict[str, Any]:
+        """
+        Определение спикеров и эмоций в диалоге через LLM.
+
+        Args:
+            segments: Список сегментов с текстом и временными метками
+            language: Язык аудио
+
+        Returns:
+            Dict с размеченными сегментами (спикер + эмоция для каждого)
+        """
+        if not segments or len(segments) == 0:
+            return {"speakers": [], "emotions": {}}
+
+        # Собираем текст для анализа
+        full_text = "\n".join([f"[{i}] {seg['text']}" for i, seg in enumerate(segments)])
+
+        prompt = f"""Проанализируй этот диалог и определи:
+1. Сколько людей говорит (спикеров)
+2. Кто что говорит (присвой каждой фразе спикера: Спикер 1, Спикер 2 и т.д.)
+3. Эмоциональный тон каждой фразы: [нейтрально], [взволнованно], [радостно], [серьезно], [напряженно], [спокойно]
+
+Диалог (каждая строка пронумерована):
+{full_text}
+
+Ответь СТРОГО в формате JSON:
+{{
+  "num_speakers": <число>,
+  "segments": [
+    {{"id": 0, "speaker": "Спикер 1", "emotion": "нейтрально"}},
+    {{"id": 1, "speaker": "Спикер 2", "emotion": "радостно"}},
+    ...
+  ]
+}}
+
+ВАЖНО: Если это монолог (один человек), укажи "Спикер 1" для всех сегментов."""
+
+        try:
+            response = self.groq.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                temperature=0.2,
+                max_tokens=2000,
+                response_format={"type": "json_object"}
+            )
+
+            import json
+            result = json.loads(response.choices[0].message.content)
+
+            # Создаем маппинг id -> (speaker, emotion)
+            speaker_map = {}
+            emotion_map = {}
+            for seg_info in result.get("segments", []):
+                seg_id = seg_info.get("id")
+                speaker_map[seg_id] = seg_info.get("speaker", "Спикер 1")
+                emotion_map[seg_id] = seg_info.get("emotion", "нейтрально")
+
+            return {
+                "num_speakers": result.get("num_speakers", 1),
+                "speaker_map": speaker_map,
+                "emotion_map": emotion_map
+            }
+
+        except Exception as e:
+            logger.warning(f"Ошибка определения спикеров/эмоций: {e}")
+            # Fallback - считаем, что это монолог
+            return {
+                "num_speakers": 1,
+                "speaker_map": {i: "Спикер 1" for i in range(len(segments))},
+                "emotion_map": {i: "нейтрально" for i in range(len(segments))}
+            }
+
     async def download_telegram_file(self, file_url: str, dst_path: str) -> None:
         """Скачивает файл из Telegram через aiohttp"""
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
@@ -143,18 +225,36 @@ class AudioProcessor:
             chunks.append(out_path)
         return chunks
 
-    async def transcribe_wav(self, wav_path: str) -> str:
-        """Транскрипция одним вызовом Groq Whisper для одного файла."""
+    async def transcribe_wav(self, wav_path: str) -> Dict[str, Any]:
+        """Транскрипция одним вызовом Groq Whisper для одного файла с timestamps."""
         with open(wav_path, "rb") as f:
             res = self.groq.audio.transcriptions.create(
                 file=("audio.wav", f, "audio/wav"),
                 model="whisper-large-v3",
                 response_format="verbose_json",
+                timestamp_granularities=["segment"],
                 temperature=0.0
             )
-        # res.text содержит текст, res.language — язык, если verbose_json
+
+        # Извлекаем текст и сегменты с timestamps
         text = getattr(res, "text", "") or ""
-        return text.strip()
+        segments = getattr(res, "segments", [])
+        language = getattr(res, "language", "unknown")
+
+        # Форматируем сегменты
+        formatted_segments = []
+        for seg in segments:
+            formatted_segments.append({
+                "start": seg.get("start", 0),
+                "end": seg.get("end", 0),
+                "text": seg.get("text", "").strip()
+            })
+
+        return {
+            "text": text.strip(),
+            "segments": formatted_segments,
+            "language": language
+        }
 
     async def process_audio_from_telegram(self, file_url: str, filename_hint: str) -> Dict[str, Any]:
         """Основной метод обработки аудио из Telegram"""
@@ -183,20 +283,51 @@ class AudioProcessor:
             # Если длительное — режем и транскрибируем по кускам
             chunk_paths = self._split_wav(wav_path, chunk_secs=600) if duration > 620 else [wav_path]
 
-            parts = []
-            for cp in chunk_paths:
-                text = await self.transcribe_wav(cp)
-                if text:
-                    parts.append(text)
+            all_segments = []
+            all_text_parts = []
+            time_offset = 0.0
+            detected_language = "unknown"
 
-            if not parts:
+            for cp in chunk_paths:
+                result = await self.transcribe_wav(cp)
+                if result and result.get("text"):
+                    all_text_parts.append(result["text"])
+                    detected_language = result.get("language", detected_language)
+
+                    # Добавляем сегменты с корректировкой времени
+                    for seg in result.get("segments", []):
+                        all_segments.append({
+                            "start": seg["start"] + time_offset,
+                            "end": seg["end"] + time_offset,
+                            "text": seg["text"]
+                        })
+
+                    # Обновляем смещение времени для следующего куска
+                    if result.get("segments"):
+                        time_offset = all_segments[-1]["end"]
+
+            if not all_text_parts:
                 return {"success": False, "error": "Не удалось распознать речь."}
 
-            transcript = "\n".join(parts)
+            transcript = "\n".join(all_text_parts)
+
+            # Определяем спикеров и эмоции (только если есть сегменты)
+            speaker_emotion_data = None
+            if all_segments and len(all_segments) > 0:
+                try:
+                    speaker_emotion_data = await self.detect_speakers_and_emotions(
+                        all_segments, detected_language
+                    )
+                except Exception as e:
+                    logger.warning(f"Не удалось определить спикеров/эмоции: {e}")
+
             return {
                 "success": True,
                 "transcript": transcript,
+                "segments": all_segments,
+                "language": detected_language,
                 "duration_sec": duration,
+                "speaker_emotion_data": speaker_emotion_data,
                 "tmp_dir": tmp_dir
             }
         except Exception as e:
@@ -229,10 +360,12 @@ class AudioProcessor:
         """Синхронная обертка для транскрипции (обратная совместимость)"""
         try:
             loop = asyncio.get_event_loop()
-            text = loop.run_until_complete(self.transcribe_wav(file_path))
+            result = loop.run_until_complete(self.transcribe_wav(file_path))
             return {
                 'success': True,
-                'text': text,
+                'text': result.get('text', ''),
+                'segments': result.get('segments', []),
+                'language': result.get('language', 'unknown'),
                 'method': 'Groq Whisper API'
             }
         except Exception as e:
