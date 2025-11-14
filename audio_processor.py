@@ -94,8 +94,13 @@ class AudioProcessor:
                 response_format={"type": "json_object"}
             )
 
-            import json
-            result = json.loads(response.choices[0].message.content)
+            content = response.choices[0].message.content
+            # При response_format="json_object" Groq может вернуть dict или строку
+            if isinstance(content, str):
+                import json
+                result = json.loads(content)
+            else:
+                result = content
 
             # Создаем маппинг id -> (speaker, emotion)
             speaker_map = {}

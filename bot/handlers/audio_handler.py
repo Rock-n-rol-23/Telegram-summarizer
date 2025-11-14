@@ -433,11 +433,17 @@ class AudioHandler(BaseHandler):
                         response_format={"type": "json_object"}
                     )
                     if response.choices and response.choices[0].message:
-                        import json
-                        result = json.loads(response.choices[0].message.content)
+                        content = response.choices[0].message.content
+                        # При response_format="json_object" Groq может вернуть dict или строку
+                        if isinstance(content, str):
+                            import json
+                            result = json.loads(content)
+                        else:
+                            result = content
+
                         return {
-                            "summary": result.get("summary", "").strip(),
-                            "reasoning": result.get("reasoning", "").strip()
+                            "summary": result.get("summary", "").strip() if isinstance(result.get("summary"), str) else str(result.get("summary", "")),
+                            "reasoning": result.get("reasoning", "").strip() if isinstance(result.get("reasoning"), str) else str(result.get("reasoning", ""))
                         }
                 except Exception as e:
                     logger.warning(f"Groq API error: {e}")
