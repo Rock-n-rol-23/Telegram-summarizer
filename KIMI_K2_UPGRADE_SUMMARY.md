@@ -28,34 +28,43 @@ USE_GEMINI_PRIMARY = True
 OPENROUTER_PRIMARY_MODEL = 'deepseek/deepseek-chat-v3.1:free'
 ```
 
-#### После:
+#### После (v2 - текущая версия):
 ```python
-# Primary: Kimi K2 via OpenRouter (256K context, free)
-USE_OPENROUTER_PRIMARY = True (default)
+# Primary: Gemini 2.5 Flash (работает сразу, не требует дополнительных ключей)
+USE_GEMINI_PRIMARY = True (default)
+GEMINI_MODEL = 'gemini-2.5-flash'
+GEMINI_VISION_MODEL = 'gemini-2.5-flash'
+
+# Secondary: Kimi K2 via OpenRouter (256K context, требует API ключ)
+USE_OPENROUTER_PRIMARY = False (default)
+OPENROUTER_API_KEY = '' # Получить на https://openrouter.ai/keys
 OPENROUTER_PRIMARY_MODEL = 'moonshotai/kimi-k2:free'
 OPENROUTER_SECONDARY_MODEL = 'deepseek/deepseek-chat-v3.1:free'
 OPENROUTER_TERTIARY_MODEL = 'qwen/qwen-2.5-72b-instruct:free'
-
-# Secondary: Gemini 2.5 Flash (vision/multimodal only)
-USE_GEMINI_PRIMARY = False (default)
-GEMINI_MODEL = 'gemini-2.5-flash'
-GEMINI_VISION_MODEL = 'gemini-2.5-flash'
 ```
+
+**⚠️ ВАЖНО:** Для использования Kimi K2 необходимо:
+1. Получить бесплатный API ключ: https://openrouter.ai/keys
+2. Добавить в `.env`: `OPENROUTER_API_KEY=sk-or-v1-...`
+3. Опционально включить: `USE_OPENROUTER_PRIMARY=true`
 
 ### 2. **llm/provider_router.py** - Обновленная логика роутинга
 
-#### Новый приоритет моделей:
-1. **Kimi K2** (moonshotai/kimi-k2:free) - основная для текстов
-2. **DeepSeek V3** (deepseek/deepseek-chat-v3.1:free) - fallback #1
-3. **Qwen 2.5 72B** (qwen/qwen-2.5-72b-instruct:free) - fallback #2
-4. **Gemini 2.5 Flash** - fallback #3 / основная для vision
+#### Новый приоритет моделей (v2):
+1. **Gemini 2.5 Flash** - основная (работает сразу)
+2. **Kimi K2** (moonshotai/kimi-k2:free) - для длинных документов (требует ключ)
+3. **DeepSeek V3** (deepseek/deepseek-chat-v3.1:free) - fallback #1
+4. **Qwen 2.5 72B** (qwen/qwen-2.5-72b-instruct:free) - fallback #2
 5. **Groq Llama 3.1 405B** - финальный fallback
 
-#### Улучшенный fallback механизм:
+**Примечание:** Если у вас есть OpenRouter API ключ, вы можете установить `USE_OPENROUTER_PRIMARY=true` для приоритета Kimi K2.
+
+#### Улучшенный fallback механизм (v2):
 ```python
 def _switch_to_fallback(self) -> Tuple[Any, str, str]:
-    # Kimi K2 → DeepSeek V3 → Qwen 2.5 → Gemini → Groq
+    # Gemini → Kimi K2 → DeepSeek V3 → Qwen 2.5 → Groq
     # С детальным логированием каждого переключения
+    # Автоматически пропускает недоступные провайдеры
 ```
 
 #### Обновленный analyze_image для Gemini Vision 2.5:
@@ -174,14 +183,16 @@ pip install easyocr
 
 2. Настройте переменные окружения (.env):
    ```bash
-   # Основные (обязательно):
-   TELEGRAM_BOT_TOKEN=your_token
-   OPENROUTER_API_KEY=your_openrouter_key  # Для Kimi K2
-   GEMINI_API_KEY=your_gemini_key  # Для Vision
+   # Обязательно:
+   TELEGRAM_BOT_TOKEN=your_telegram_token
+   GEMINI_API_KEY=your_gemini_key  # Получить на https://aistudio.google.com/app/apikey
 
-   # Опциональные настройки:
-   USE_OPENROUTER_PRIMARY=true  # По умолчанию
-   OPENROUTER_PRIMARY_MODEL=moonshotai/kimi-k2:free  # По умолчанию
+   # Опционально (для Kimi K2 и лучшего качества):
+   OPENROUTER_API_KEY=your_openrouter_key  # Получить на https://openrouter.ai/keys
+   USE_OPENROUTER_PRIMARY=true  # Если хотите использовать Kimi K2 как основную модель
+
+   # Другие опциональные:
+   GROQ_API_KEY=your_groq_key  # Для fallback
    GEMINI_VISION_MODEL=gemini-2.5-flash  # По умолчанию
    ```
 
@@ -189,6 +200,8 @@ pip install easyocr
    ```bash
    python3 main.py
    ```
+
+**Рекомендация:** Получите OpenRouter API ключ для доступа к Kimi K2 (256K контекст) и другим мощным моделям.
 
 ---
 
