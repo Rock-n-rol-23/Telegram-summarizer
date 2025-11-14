@@ -3,6 +3,7 @@
 import logging
 import re
 from typing import Optional, Tuple
+from bot.content_detector import ContentDetector
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +13,7 @@ class UpdateRouter:
 
     def __init__(self):
         self.logger = logger
+        self.content_detector = ContentDetector()
 
     def route(self, update: dict) -> Tuple[str, Optional[dict]]:
         """
@@ -39,6 +41,14 @@ class UpdateRouter:
             command = message["text"].split()[0].lower()
             return self._route_command(command)
 
+        # Проверяем на смешанный контент
+        content_items = self.content_detector.detect_content_types(message)
+        is_mixed = self.content_detector.is_mixed_content(content_items)
+
+        if is_mixed:
+            logger.info(f"Обнаружен смешанный контент: {len(content_items)} элементов")
+            return ("mixed_content", {"content_items": content_items})
+
         # Документы
         if "document" in message:
             return ("document", None)
@@ -47,8 +57,22 @@ class UpdateRouter:
         if any(key in message for key in ["voice", "audio", "video_note"]):
             return ("audio", None)
 
-        # Фото, видео, стикеры и другие медиа - игнорируем или обрабатываем caption
-        if any(key in message for key in ["photo", "video", "sticker", "animation", "video_note"]):
+        # Фото - проверяем наличие URL в caption
+        if "photo" in message:
+            # Проверяем caption на наличие URL
+            caption = message.get("caption", "")
+            if caption:
+                # Проверяем наличие обычных URL
+                urls = self._extract_urls(caption)
+                if urls:
+                    logger.info(f"Получено фото с {len(urls)} URL в caption, маршрутизация в ChoiceHandler")
+                    return ("photo_with_url", {"urls": urls})
+
+            logger.info("Получено фото, маршрутизация в PhotoHandler")
+            return ("photo", None)
+
+        # Видео, стикеры и другие медиа - обрабатываем caption или игнорируем
+        if any(key in message for key in ["video", "sticker", "animation", "video_note"]):
             # Если есть caption, обрабатываем как текст
             if "caption" in message and message["caption"].strip():
                 text = message["caption"]

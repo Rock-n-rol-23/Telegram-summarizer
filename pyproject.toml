@@ -49,6 +49,7 @@ dependencies = [
     "paddleocr>=2.9.1",
     "paddlepaddle>=2.6.1",
     "openai>=1.54.0",
+    "google-generativeai>=0.8.5",
     "youtube-transcript-api>=0.6.2",
     "tiktoken>=0.8.0",
     "ebooklib>=0.18",

@@ -105,6 +105,7 @@ class DatabaseManager:
                             summary_ratio REAL DEFAULT 0.3,
                             compression_level INTEGER DEFAULT 30,
                             language_preference TEXT DEFAULT 'auto',
+                            content_mode TEXT DEFAULT 'ask',
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         )
@@ -116,10 +117,29 @@ class DatabaseManager:
                             summary_ratio REAL DEFAULT 0.3,
                             compression_level INTEGER DEFAULT 30,
                             language_preference TEXT DEFAULT 'auto',
+                            content_mode TEXT DEFAULT 'ask',
                             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                         )
                     """)
+
+                # Миграция: добавляем content_mode если не существует
+                if self.is_postgres:
+                    # В PostgreSQL используем IF NOT EXISTS (безопасно для существующих столбцов)
+                    cursor.execute("""
+                        ALTER TABLE user_settings
+                        ADD COLUMN IF NOT EXISTS content_mode TEXT DEFAULT 'ask'
+                    """)
+                else:
+                    # В SQLite проверяем через pragma
+                    cursor.execute("PRAGMA table_info(user_settings)")
+                    columns = [col[1] for col in cursor.fetchall()]
+                    if 'content_mode' not in columns:
+                        cursor.execute("""
+                            ALTER TABLE user_settings
+                            ADD COLUMN content_mode TEXT DEFAULT 'ask'
+                        """)
+                        logger.info("Добавлено поле content_mode в user_settings")
                 
                 # Таблица статистики системы
                 if self.is_postgres:
@@ -222,13 +242,13 @@ class DatabaseManager:
         if not cursor.fetchone():
             if self.is_postgres:
                 cursor.execute("""
-                    INSERT INTO user_settings (user_id, summary_ratio, compression_level, language_preference)
-                    VALUES (%s, 0.3, 30, 'auto')
+                    INSERT INTO user_settings (user_id, summary_ratio, compression_level, language_preference, content_mode)
+                    VALUES (%s, 0.3, 30, 'auto', 'ask')
                 """, (user_id,))
             else:
                 cursor.execute("""
-                    INSERT INTO user_settings (user_id, summary_ratio, compression_level, language_preference)
-                    VALUES (?, 0.3, 30, 'auto')
+                    INSERT INTO user_settings (user_id, summary_ratio, compression_level, language_preference, content_mode)
+                    VALUES (?, 0.3, 30, 'auto', 'ask')
                 """, (user_id,))
     
     def get_user_settings(self, user_id: int) -> Dict:
@@ -236,24 +256,25 @@ class DatabaseManager:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 if self.is_postgres:
                     cursor.execute("""
-                        SELECT summary_ratio, compression_level, language_preference, created_at, updated_at
+                        SELECT summary_ratio, compression_level, language_preference, content_mode, created_at, updated_at
                         FROM user_settings WHERE user_id = %s
                     """, (user_id,))
                 else:
                     cursor.execute("""
-                        SELECT summary_ratio, compression_level, language_preference, created_at, updated_at
+                        SELECT summary_ratio, compression_level, language_preference, content_mode, created_at, updated_at
                         FROM user_settings WHERE user_id = ?
                     """, (user_id,))
-                
+
                 row = cursor.fetchone()
                 if row:
                     return {
                         'summary_ratio': row['summary_ratio'],
                         'compression_level': row['compression_level'],
                         'language_preference': row['language_preference'],
+                        'content_mode': row.get('content_mode', 'ask'),
                         'created_at': row['created_at'],
                         'updated_at': row['updated_at']
                     }
@@ -264,6 +285,7 @@ class DatabaseManager:
                         'summary_ratio': 0.3,
                         'compression_level': 30,
                         'language_preference': 'auto',
+                        'content_mode': 'ask',
                         'created_at': datetime.now().isoformat(),
                         'updated_at': datetime.now().isoformat()
                     }
@@ -274,12 +296,14 @@ class DatabaseManager:
                 'summary_ratio': 0.3,
                 'compression_level': 30,
                 'language_preference': 'auto',
+                'content_mode': 'ask',
                 'created_at': datetime.now().isoformat(),
                 'updated_at': datetime.now().isoformat()
             }
-    
-    def update_user_settings(self, user_id: int, summary_ratio: float = None, 
-                           compression_level: int = None, language_preference: str = None):
+
+    def update_user_settings(self, user_id: int, summary_ratio: float = None,
+                           compression_level: int = None, language_preference: str = None,
+                           content_mode: str = None):
         """Обновление настроек пользователя"""
         try:
             with self.get_connection() as conn:
@@ -311,7 +335,14 @@ class DatabaseManager:
                     else:
                         update_fields.append("language_preference = ?")
                     params.append(language_preference)
-                
+
+                if content_mode is not None:
+                    if self.is_postgres:
+                        update_fields.append("content_mode = %s")
+                    else:
+                        update_fields.append("content_mode = ?")
+                    params.append(content_mode)
+
                 if update_fields:
                     if self.is_postgres:
                         update_fields.append("updated_at = %s")

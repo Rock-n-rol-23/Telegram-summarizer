@@ -6,6 +6,7 @@ import sqlite3
 from typing import Dict, Set, Optional
 from .base import BaseHandler
 from bot.core.decorators import retry_on_failure
+from llm.provider_router import groq_compatible_client
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,8 @@ class DocumentHandler(BaseHandler):
     ):
         super().__init__(session, base_url, db, state_manager)
         self.file_processor = file_processor
-        self.groq_client = groq_client
+        # Используем Groq-совместимый wrapper с LLM Router (Gemini → OpenRouter → Groq)
+        self.groq_client = groq_compatible_client
         self.user_requests = user_requests
         self.processing_users = processing_users
         self.db_executor = db_executor
@@ -70,6 +72,29 @@ class DocumentHandler(BaseHandler):
             logger.info(
                 f"Получен документ от пользователя {user_id}: {file_name} ({file_size} байт)"
             )
+
+            # Проверка размера файла (максимум 20 MB = 20,971,520 байт)
+            MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB в байтах
+            if file_size > MAX_FILE_SIZE:
+                size_mb = file_size / (1024 * 1024)
+                max_size_mb = MAX_FILE_SIZE / (1024 * 1024)
+
+                await self.send_message(
+                    chat_id,
+                    f"❌ <b>Файл слишком большой!</b>\n\n"
+                    f"📄 Файл: <code>{file_name}</code>\n"
+                    f"📊 Размер: <b>{size_mb:.1f} MB</b>\n"
+                    f"⚠️ Максимум: <b>{max_size_mb:.0f} MB</b>\n\n"
+                    f"💡 <b>Решение:</b>\n"
+                    f"• Разбейте файл на части\n"
+                    f"• Сожмите PDF (используйте онлайн-сервисы)\n"
+                    f"• Удалите изображения из документа",
+                    parse_mode="HTML"
+                )
+
+                # Удаляем пользователя из списка обрабатываемых
+                self.processing_users.discard(user_id)
+                return
 
             # Отправляем сообщение о начале обработки
             processing_message = await self.send_message(

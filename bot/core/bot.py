@@ -11,7 +11,9 @@ from bot.handlers.commands import CommandHandler
 from bot.handlers.text_handler import TextHandler
 from bot.handlers.document_handler import DocumentHandler
 from bot.handlers.audio_handler import AudioHandler
+from bot.handlers.photo_handler import PhotoHandler
 from bot.handlers.callback_handler import CallbackHandler
+from bot.handlers.choice_handler import ChoiceHandler
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +80,17 @@ class RefactoredBot:
         self.text_handler: Optional[TextHandler] = None
         self.document_handler: Optional[DocumentHandler] = None
         self.audio_handler: Optional[AudioHandler] = None
+        self.photo_handler: Optional[PhotoHandler] = None
         self.callback_handler: Optional[CallbackHandler] = None
+        self.choice_handler: Optional[ChoiceHandler] = None
 
         # Offset для long polling
         self.update_offset = 0
+
+        # Throttling для логирования ошибок
+        self._last_error_log_time = 0
+        self._error_log_interval = 10  # Логировать ошибки максимум раз в 10 секунд
+        self._consecutive_502_errors = 0
 
         logger.info("RefactoredBot инициализирован")
 
@@ -136,6 +145,7 @@ class RefactoredBot:
             user_settings=self.user_settings,
             user_messages_buffer=self.user_messages_buffer,
             db_executor=self.executor,
+            url_processor=self.url_processor,
         )
 
         # DocumentHandler
@@ -167,6 +177,17 @@ class RefactoredBot:
             db_executor=self.executor,
         )
 
+        # PhotoHandler (Gemini Vision)
+        self.photo_handler = PhotoHandler(
+            session=self.session,
+            base_url=self.base_url,
+            db=self.db,
+            state_manager=self.state_manager,
+            user_requests=self.user_requests,
+            processing_users=self.processing_users,
+            db_executor=self.executor,
+        )
+
         # CallbackHandler (передаем text_handler для пересоздания саммари)
         self.callback_handler = CallbackHandler(
             session=self.session,
@@ -176,7 +197,18 @@ class RefactoredBot:
             text_handler=self.text_handler,
         )
 
-        logger.info("✅ Все handlers инициализированы")
+        # ChoiceHandler (для диалога выбора между фото и ссылкой)
+        self.choice_handler = ChoiceHandler(
+            session=self.session,
+            base_url=self.base_url,
+            db=self.db,
+            state_manager=self.state_manager,
+            photo_handler=self.photo_handler,
+            text_handler=self.text_handler,
+            url_processor=self.url_processor,
+        )
+
+        logger.info("✅ Все handlers инициализированы (включая PhotoHandler для Gemini Vision и ChoiceHandler)")
 
     async def run_polling(self):
         """Основной цикл long polling"""
@@ -217,14 +249,29 @@ class RefactoredBot:
             # Диспетчеризация к соответствующему handler
             if handler_type == "command":
                 await self._handle_command(update, extra_data)
+            elif handler_type == "mixed_content":
+                # Смешанный контент - обрабатываем через ChoiceHandler
+                content_items = extra_data.get("content_items", [])
+                await self.choice_handler.handle_mixed_content(update, content_items)
             elif handler_type == "text":
                 await self.text_handler.handle_text_message(update)
             elif handler_type == "document":
                 await self.document_handler.handle_document_message(update)
             elif handler_type == "audio":
                 await self.audio_handler.handle_audio_message(update)
+            elif handler_type == "photo":
+                await self.photo_handler.handle_photo_message(update)
+            elif handler_type == "photo_with_url":
+                # Фото с URL - даем пользователю выбрать что обрабатывать
+                urls = extra_data.get("urls", [])
+                await self.choice_handler.handle_photo_with_url(update, urls)
             elif handler_type == "callback":
-                await self.callback_handler.handle_callback_query(update["callback_query"])
+                # Проверяем, это callback от choice_handler или от других handlers
+                callback_data = update["callback_query"]["data"]
+                if callback_data.startswith("choice_") or callback_data.startswith("content_") or callback_data.startswith("smart_"):
+                    await self.choice_handler.handle_choice_callback(update["callback_query"])
+                else:
+                    await self.callback_handler.handle_callback_query(update["callback_query"])
             elif handler_type == "youtube":
                 await self.text_handler.handle_text_message(update)  # YouTube обрабатывается в TextHandler
             elif handler_type == "url":
@@ -267,7 +314,7 @@ class RefactoredBot:
             logger.warning(f"Неизвестная команда: {command}")
 
     async def _get_updates(self) -> list:
-        """Получение обновлений от Telegram API"""
+        """Получение обновлений от Telegram API с retry логикой"""
         url = f"{self.base_url}/getUpdates"
         params = {
             "offset": self.update_offset,
@@ -275,19 +322,61 @@ class RefactoredBot:
             "allowed_updates": ["message", "callback_query"],
         }
 
-        try:
-            async with self.session.get(url, params=params, timeout=35) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return data.get("result", [])
-                else:
-                    logger.error(f"Ошибка getUpdates: {response.status}")
-                    return []
-        except asyncio.TimeoutError:
-            return []
-        except Exception as e:
-            logger.error(f"Ошибка запроса getUpdates: {e}")
-            return []
+        max_retries = 3
+        retry_delay = 1  # Начальная задержка в секундах
+
+        for attempt in range(max_retries):
+            try:
+                async with self.session.get(url, params=params, timeout=35) as response:
+                    if response.status == 200:
+                        # Успешный запрос - сбрасываем счетчик ошибок
+                        self._consecutive_502_errors = 0
+                        data = await response.json()
+                        return data.get("result", [])
+                    elif response.status == 502:
+                        # 502 Bad Gateway - временная проблема
+                        self._consecutive_502_errors += 1
+
+                        # Логируем только периодически, чтобы не спамить
+                        import time
+                        current_time = time.time()
+                        if current_time - self._last_error_log_time > self._error_log_interval:
+                            logger.warning(
+                                f"Telegram API 502 (попытка {attempt + 1}/{max_retries}). "
+                                f"Последовательных ошибок: {self._consecutive_502_errors}"
+                            )
+                            self._last_error_log_time = current_time
+
+                        # Retry с exponential backoff
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
+                        continue
+                    else:
+                        # Другие ошибки - логируем один раз
+                        import time
+                        current_time = time.time()
+                        if current_time - self._last_error_log_time > self._error_log_interval:
+                            logger.error(f"Ошибка getUpdates: {response.status}")
+                            self._last_error_log_time = current_time
+                        return []
+            except asyncio.TimeoutError:
+                # Таймаут - это нормально для long polling
+                return []
+            except Exception as e:
+                import time
+                current_time = time.time()
+                if current_time - self._last_error_log_time > self._error_log_interval:
+                    logger.error(f"Ошибка запроса getUpdates: {e}")
+                    self._last_error_log_time = current_time
+
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+                continue
+
+        # Все попытки исчерпаны
+        return []
 
     async def _get_me(self) -> Optional[dict]:
         """Получение информации о боте"""
