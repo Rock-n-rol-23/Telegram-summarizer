@@ -218,13 +218,15 @@ class AudioHandler(BaseHandler):
             reasoning = None
 
             try:
+                logger.info(f"Начинаю суммаризацию для пользователя {user_id}")
                 compression_level = await self.get_user_compression_level(user_id)
                 target_ratio = compression_level / 100.0
                 result = await self.summarize_audio_with_reasoning(transcript, target_ratio)
                 summary = result.get("summary", "")
                 reasoning = result.get("reasoning", "")
+                logger.info(f"Суммаризация завершена. Summary: {len(summary) if summary else 0} символов, Reasoning: {len(reasoning) if reasoning else 0} символов")
             except Exception as e:
-                logger.warning(f"Суммаризация с reasoning не сработала: {e}")
+                logger.error(f"Суммаризация с reasoning не сработала: {e}", exc_info=True)
 
             # Если нет саммаризации, показываем транскрипт
             if not summary:
@@ -275,19 +277,29 @@ class AudioHandler(BaseHandler):
             }
 
             # Отправляем результат с кнопками
+            logger.info(f"Отправляю финальное сообщение пользователю {user_id}, длина: {len(final_message)} символов")
             if progress_message_id and isinstance(progress_message_id, int):
                 try:
-                    await self.edit_message_with_keyboard(
+                    response = await self.edit_message_with_keyboard(
                         chat_id,
                         progress_message_id,
                         final_message,
                         keyboard
                     )
+                    logger.info(f"Сообщение успешно отредактировано: {response.get('ok', False)}")
                 except Exception as e:
-                    logger.warning(f"Не удалось отредактировать сообщение: {e}")
-                    await self.send_message_with_keyboard(chat_id, final_message, keyboard)
+                    logger.error(f"Не удалось отредактировать сообщение: {e}", exc_info=True)
+                    try:
+                        response = await self.send_message_with_keyboard(chat_id, final_message, keyboard)
+                        logger.info(f"Отправлено новое сообщение: {response.get('ok', False)}")
+                    except Exception as e2:
+                        logger.error(f"Не удалось отправить новое сообщение: {e2}", exc_info=True)
             else:
-                await self.send_message_with_keyboard(chat_id, final_message, keyboard)
+                try:
+                    response = await self.send_message_with_keyboard(chat_id, final_message, keyboard)
+                    logger.info(f"Отправлено сообщение: {response.get('ok', False)}")
+                except Exception as e:
+                    logger.error(f"Не удалось отправить сообщение: {e}", exc_info=True)
 
             # Сохраняем в базу
             try:
@@ -305,16 +317,20 @@ class AudioHandler(BaseHandler):
                 logger.error(f"Ошибка сохранения в БД: {e}")
 
         except Exception as e:
-            logger.error(f"Ошибка обработки аудио для пользователя {user_id}: {e}")
+            logger.error(f"Ошибка обработки аудио для пользователя {user_id}: {e}", exc_info=True)
             error_msg = f"❌ Произошла ошибка при обработке аудио\n\n{str(e)[:200]}..."
 
-            if progress_message_id:
-                await self.edit_message_text(chat_id, progress_message_id, error_msg)
-            else:
-                await self.send_message(chat_id, error_msg)
+            try:
+                if progress_message_id:
+                    await self.edit_message_text(chat_id, progress_message_id, error_msg)
+                else:
+                    await self.send_message(chat_id, error_msg)
+            except Exception as send_error:
+                logger.error(f"Не удалось отправить сообщение об ошибке: {send_error}", exc_info=True)
 
         finally:
             # Убираем пользователя из списка обрабатываемых
+            logger.info(f"Завершена обработка аудио для пользователя {user_id}, удаляю из processing_users")
             self.processing_users.discard(user_id)
 
     # ============ Вспомогательные методы ============
@@ -425,13 +441,21 @@ class AudioHandler(BaseHandler):
             # Пробуем Groq
             if self.groq_client:
                 try:
-                    response = self.groq_client.chat.completions.create(
-                        messages=[{"role": "user", "content": prompt}],
-                        model="llama-3.3-70b-versatile",
-                        temperature=0.3,
-                        max_tokens=3000,
-                        response_format={"type": "json_object"}
+                    logger.info("Отправляю запрос к Groq API для суммаризации с reasoning")
+                    # Обёртываем синхронный вызов в executor чтобы не блокировать event loop
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    response = await loop.run_in_executor(
+                        self.db_executor,
+                        lambda: self.groq_client.chat.completions.create(
+                            messages=[{"role": "user", "content": prompt}],
+                            model="llama-3.3-70b-versatile",
+                            temperature=0.3,
+                            max_tokens=3000,
+                            response_format={"type": "json_object"}
+                        )
                     )
+                    logger.info("Получен ответ от Groq API")
                     if response.choices and response.choices[0].message:
                         content = response.choices[0].message.content
                         # При response_format="json_object" Groq может вернуть dict или строку
@@ -441,12 +465,13 @@ class AudioHandler(BaseHandler):
                         else:
                             result = content
 
+                        logger.info(f"Успешно распарсен JSON ответ от Groq: summary={len(result.get('summary', ''))} chars, reasoning={len(result.get('reasoning', ''))} chars")
                         return {
                             "summary": result.get("summary", "").strip() if isinstance(result.get("summary"), str) else str(result.get("summary", "")),
                             "reasoning": result.get("reasoning", "").strip() if isinstance(result.get("reasoning"), str) else str(result.get("reasoning", ""))
                         }
                 except Exception as e:
-                    logger.warning(f"Groq API error: {e}")
+                    logger.error(f"Groq API error: {e}", exc_info=True)
 
             # Fallback на OpenRouter (если есть)
             if self.openrouter_client:
