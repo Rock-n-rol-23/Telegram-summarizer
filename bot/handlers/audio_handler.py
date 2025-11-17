@@ -278,6 +278,8 @@ class AudioHandler(BaseHandler):
 
             # Отправляем результат с кнопками
             logger.info(f"Отправляю финальное сообщение пользователю {user_id}, длина: {len(final_message)} символов")
+            message_sent = False
+
             if progress_message_id and isinstance(progress_message_id, int):
                 try:
                     response = await self.edit_message_with_keyboard(
@@ -286,20 +288,50 @@ class AudioHandler(BaseHandler):
                         final_message,
                         keyboard
                     )
-                    logger.info(f"Сообщение успешно отредактировано: {response.get('ok', False)}")
+                    logger.info(f"Ответ от edit_message_with_keyboard: {response}")
+
+                    # Проверяем успешность редактирования
+                    if response and response.get('ok'):
+                        logger.info(f"Сообщение успешно отредактировано")
+                        message_sent = True
+                    else:
+                        error_desc = response.get('description', 'Unknown error') if response else 'No response'
+                        logger.warning(f"Редактирование сообщения вернуло ok=False: {error_desc}")
+                        # Пробуем отправить новое сообщение
+                        raise Exception(f"Edit failed: {error_desc}")
+
                 except Exception as e:
                     logger.error(f"Не удалось отредактировать сообщение: {e}", exc_info=True)
                     try:
+                        logger.info("Пробую отправить новое сообщение вместо редактирования")
                         response = await self.send_message_with_keyboard(chat_id, final_message, keyboard)
-                        logger.info(f"Отправлено новое сообщение: {response.get('ok', False)}")
+                        logger.info(f"Ответ от send_message_with_keyboard: {response}")
+
+                        if response and response.get('ok'):
+                            logger.info(f"Новое сообщение успешно отправлено")
+                            message_sent = True
+                        else:
+                            error_desc = response.get('description', 'Unknown error') if response else 'No response'
+                            logger.error(f"Отправка нового сообщения вернула ok=False: {error_desc}")
                     except Exception as e2:
                         logger.error(f"Не удалось отправить новое сообщение: {e2}", exc_info=True)
             else:
                 try:
+                    logger.info("Progress message ID отсутствует, отправляю новое сообщение")
                     response = await self.send_message_with_keyboard(chat_id, final_message, keyboard)
-                    logger.info(f"Отправлено сообщение: {response.get('ok', False)}")
+                    logger.info(f"Ответ от send_message_with_keyboard: {response}")
+
+                    if response and response.get('ok'):
+                        logger.info(f"Сообщение успешно отправлено")
+                        message_sent = True
+                    else:
+                        error_desc = response.get('description', 'Unknown error') if response else 'No response'
+                        logger.error(f"Отправка сообщения вернула ok=False: {error_desc}")
                 except Exception as e:
                     logger.error(f"Не удалось отправить сообщение: {e}", exc_info=True)
+
+            if not message_sent:
+                logger.error(f"КРИТИЧЕСКАЯ ОШИБКА: Пользователь {user_id} не получил финальное сообщение!")
 
             # Сохраняем в базу
             try:
@@ -589,18 +621,36 @@ class AudioHandler(BaseHandler):
     async def send_message_with_keyboard(self, chat_id: int, text: str, keyboard: dict):
         """Отправляет сообщение с inline клавиатурой"""
         url = f"{self.base_url}/sendMessage"
+
+        # Сначала пробуем с Markdown
         data = {
             "chat_id": chat_id,
             "text": text,
             "reply_markup": keyboard,
             "parse_mode": "Markdown"
         }
+
         async with self.session.post(url, json=data) as response:
-            return await response.json()
+            result = await response.json()
+
+            # Если ошибка связана с parse_mode, пробуем без него
+            if not result.get('ok') and 'parse' in result.get('description', '').lower():
+                logger.warning(f"Markdown parsing failed, retrying without parse_mode: {result.get('description')}")
+                data_no_parse = {
+                    "chat_id": chat_id,
+                    "text": text,
+                    "reply_markup": keyboard
+                }
+                async with self.session.post(url, json=data_no_parse) as response2:
+                    return await response2.json()
+
+            return result
 
     async def edit_message_with_keyboard(self, chat_id: int, message_id: int, text: str, keyboard: dict):
         """Редактирует сообщение с inline клавиатурой"""
         url = f"{self.base_url}/editMessageText"
+
+        # Сначала пробуем с Markdown
         data = {
             "chat_id": chat_id,
             "message_id": message_id,
@@ -608,8 +658,23 @@ class AudioHandler(BaseHandler):
             "reply_markup": keyboard,
             "parse_mode": "Markdown"
         }
+
         async with self.session.post(url, json=data) as response:
-            return await response.json()
+            result = await response.json()
+
+            # Если ошибка связана с parse_mode, пробуем без него
+            if not result.get('ok') and 'parse' in result.get('description', '').lower():
+                logger.warning(f"Markdown parsing failed, retrying without parse_mode: {result.get('description')}")
+                data_no_parse = {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": text,
+                    "reply_markup": keyboard
+                }
+                async with self.session.post(url, json=data_no_parse) as response2:
+                    return await response2.json()
+
+            return result
 
     async def handle_audio_callback(self, callback_query: dict):
         """Обработка callback запросов от кнопок аудио"""
